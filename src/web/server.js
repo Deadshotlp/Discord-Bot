@@ -21,6 +21,7 @@ import { registerMonitoringRoutes } from "./routes/monitoring.js";
 import { registerSteamRoutes } from "./routes/steam.js";
 import { registerSupportRoutes } from "./routes/support.js";
 import { registerTeamListRoutes } from "./routes/teamList.js";
+import { registerUpdatesRoutes } from "./routes/updates.js";
 
 const publicDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -61,6 +62,7 @@ export function createWebServer(client) {
   registerMeetingRoutes(router, { client });
   registerSteamRoutes(router, { client });
   registerCreatorRoutes(router, { client });
+  registerUpdatesRoutes(router, { client });
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, env.webBaseUrl);

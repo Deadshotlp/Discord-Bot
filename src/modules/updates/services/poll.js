@@ -1,5 +1,134 @@
-import { fetchLatestUpdate } from "./github.js";
-import { buildRepoUpdateEmbed } from "./embeds.js";
+import {
+  fetchCompare,
+  fetchLatestCommit,
+  fetchLatestUpdate,
+  fetchRepoInfo,
+  repoSlugFromHtmlUrl
+} from "./github.js";
+import { buildForkUpdateEmbed, buildRepoUpdateEmbed } from "./embeds.js";
+import { forkKey, getRepos, normalizeRepos, repoKey, saveRepos, selectNewForkCommits } from "./repos.js";
+
+/**
+ * Übernimmt einen neuen Namen, wenn GitHub das Repo inzwischen unter anderem
+ * Namen ausliefert (Umbenennung oder Besitzerwechsel).
+ */
+function followRename(entry, url, logger, guildId) {
+  const current = repoSlugFromHtmlUrl(url);
+
+  if (!current || (current.owner === entry.owner && current.repo === entry.repo)) {
+    return false;
+  }
+
+  logger.info("GitHub-Repo wurde umbenannt, Eintrag angepasst", {
+    guildId,
+    von: repoKey(entry),
+    nach: repoKey(current)
+  });
+
+  entry.owner = current.owner;
+  entry.repo = current.repo;
+  return true;
+}
+
+async function pollRepo({ channel, entry, env, logger, guildId }) {
+  const update = await fetchLatestUpdate(entry.owner, entry.repo, env.githubToken);
+  if (!update) {
+    return false;
+  }
+
+  const renamed = followRename(entry, update.url, logger, guildId);
+
+  if (update.id === entry.lastSeenId) {
+    return renamed;
+  }
+
+  if (entry.lastSeenId) {
+    await channel.send({ embeds: [buildRepoUpdateEmbed(entry, update)] });
+  }
+
+  entry.lastSeenId = update.id;
+  return true;
+}
+
+/**
+ * Nur die Commits des Forks, die es im Original nicht gibt. Holt der Fork bloß
+ * den Stand des Originals nach, wird nichts gepostet – das stand ja schon im
+ * Kanal.
+ */
+async function collectForkChanges(entry, fork, latest, token) {
+  try {
+    const parentInfo = await fetchRepoInfo(entry.owner, entry.repo, token);
+    const comparison = await fetchCompare(
+      entry.owner,
+      entry.repo,
+      parentInfo.default_branch,
+      `${fork.owner}:${fork.branch}`,
+      token
+    );
+
+    return {
+      commits: selectNewForkCommits(comparison.commits || [], fork.lastSeenId),
+      aheadBy: Number(comparison.ahead_by) || 0,
+      compareUrl: comparison.html_url || ""
+    };
+  } catch {
+    // Vergleich nicht möglich (z. B. Branch umbenannt) – dann wenigstens den
+    // neuesten Commit melden statt still zu bleiben.
+    return { commits: [latest], aheadBy: null, compareUrl: "" };
+  }
+}
+
+async function pollFork({ channel, entry, fork, env, logger, guildId }) {
+  const latest = await fetchLatestCommit(fork.owner, fork.repo, env.githubToken, fork.branch);
+  if (!latest) {
+    return false;
+  }
+
+  const renamed = followRename(fork, latest.html_url, logger, guildId);
+
+  if (latest.sha === fork.lastSeenId) {
+    return renamed;
+  }
+
+  if (fork.lastSeenId) {
+    const changes = await collectForkChanges(entry, fork, latest, env.githubToken);
+
+    if (changes.commits.length > 0) {
+      await channel.send({ embeds: [buildForkUpdateEmbed(entry, fork, changes)] });
+    }
+  }
+
+  fork.lastSeenId = latest.sha;
+  return true;
+}
+
+/**
+ * Überträgt den Polling-Stand (gesehene IDs, neue Namen) auf die aktuelle
+ * Liste. Ein Durchlauf dauert einige Sekunden; wer in der Zeit im Dashboard
+ * einen Fork hinzufügt oder entfernt, soll das nicht verlieren.
+ */
+function mergePollState(current, polled, originalKeys) {
+  const byOriginalKey = new Map(polled.map((entry) => [originalKeys.get(entry).toLowerCase(), entry]));
+
+  for (const entry of current) {
+    const source = byOriginalKey.get(repoKey(entry).toLowerCase());
+    if (!source) {
+      continue;
+    }
+
+    const forksByOriginalKey = new Map(source.forks.map((fork) => [originalKeys.get(fork).toLowerCase(), fork]));
+    Object.assign(entry, { owner: source.owner, repo: source.repo, lastSeenId: source.lastSeenId });
+
+    for (const fork of entry.forks) {
+      const polledFork = forksByOriginalKey.get(forkKey(fork).toLowerCase());
+      if (polledFork) {
+        Object.assign(fork, { owner: polledFork.owner, repo: polledFork.repo, lastSeenId: polledFork.lastSeenId });
+      }
+    }
+  }
+
+  return current;
+}
 
 async function pollGuild(client, guild) {
   const { settingsStore, logger, env } = client.botContext;
@@ -8,10 +137,9 @@ async function pollGuild(client, guild) {
     return;
   }
 
-  const state = settingsStore.getModuleState(guild.id, "updates");
-  const config = state?.config || {};
+  const config = settingsStore.getModuleState(guild.id, "updates")?.config || {};
   const channelId = config.channelId;
-  const repos = Array.isArray(config.repos) ? config.repos : [];
+  const repos = normalizeRepos(config.repos);
 
   if (!channelId || repos.length === 0) {
     return;
@@ -24,32 +152,43 @@ async function pollGuild(client, guild) {
     return;
   }
 
+  const originalKeys = new Map();
+  for (const entry of repos) {
+    originalKeys.set(entry, repoKey(entry));
+    for (const fork of entry.forks) {
+      originalKeys.set(fork, forkKey(fork));
+    }
+  }
+
   let changed = false;
 
-  for (const repoEntry of repos) {
+  for (const entry of repos) {
     try {
-      const update = await fetchLatestUpdate(repoEntry.owner, repoEntry.repo, env.githubToken);
-      if (!update || update.id === repoEntry.lastSeenId) {
-        continue;
-      }
-
-      if (repoEntry.lastSeenId) {
-        await channel.send({ embeds: [buildRepoUpdateEmbed(repoEntry, update)] });
-      }
-
-      repoEntry.lastSeenId = update.id;
-      changed = true;
+      changed = (await pollRepo({ channel, entry, env, logger, guildId: guild.id })) || changed;
     } catch (error) {
       logger.warn("Update-Check fehlgeschlagen", {
         guildId: guild.id,
-        repo: `${repoEntry.owner}/${repoEntry.repo}`,
+        repo: repoKey(entry),
         error: String(error)
       });
+    }
+
+    for (const fork of entry.forks) {
+      try {
+        changed = (await pollFork({ channel, entry, fork, env, logger, guildId: guild.id })) || changed;
+      } catch (error) {
+        logger.warn("Fork-Check fehlgeschlagen", {
+          guildId: guild.id,
+          repo: repoKey(entry),
+          fork: forkKey(fork),
+          error: String(error)
+        });
+      }
     }
   }
 
   if (changed) {
-    settingsStore.setModuleConfig(guild.id, "updates", { ...config, repos });
+    saveRepos(settingsStore, guild.id, mergePollState(getRepos(settingsStore, guild.id), repos, originalKeys));
   }
 }
 

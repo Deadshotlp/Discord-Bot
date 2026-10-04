@@ -93,6 +93,14 @@ export const api = {
   steamLinks: (guildId) => request("GET", `/api/guilds/${guildId}/steam/links`),
   steamUnlink: (guildId, discordId) => request("DELETE", `/api/guilds/${guildId}/steam/links/${discordId}`, {}),
 
+  updateRepos: (guildId) => request("GET", `/api/guilds/${guildId}/updates/repos`),
+  addUpdateRepo: (guildId, data) => request("POST", `/api/guilds/${guildId}/updates/repos`, data),
+  removeUpdateRepo: (guildId, slug) => request("DELETE", `/api/guilds/${guildId}/updates/repos/${slug}`, {}),
+  forkCandidates: (guildId, slug) => request("GET", `/api/guilds/${guildId}/updates/repos/${slug}/fork-candidates`),
+  addUpdateFork: (guildId, slug, data) => request("POST", `/api/guilds/${guildId}/updates/repos/${slug}/forks`, data),
+  removeUpdateFork: (guildId, slug, fork) =>
+    request("DELETE", `/api/guilds/${guildId}/updates/repos/${slug}/forks/${encodeURIComponent(fork)}`, {}),
+
   audit: (guildId) => request("GET", `/api/guilds/${guildId}/audit`)
 };
 

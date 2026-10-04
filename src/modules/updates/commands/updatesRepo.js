@@ -1,106 +1,100 @@
 import { MessageFlags, SlashCommandBuilder } from "discord.js";
 import { canManageServer } from "../../../core/permissions.js";
-import { fetchLatestUpdate, fetchRepoInfo, parseRepoSlug } from "../services/github.js";
+import { parseRepoSlug } from "../services/github.js";
+import {
+  RepoConfigError,
+  addFork,
+  addRepo,
+  findRepoIndex,
+  forkKey,
+  getRepos,
+  listForkCandidates,
+  removeFork,
+  removeRepo,
+  repoKey
+} from "../services/repos.js";
 
-function getRepos(settingsStore, guildId) {
-  const state = settingsStore.getModuleState(guildId, "updates");
-  return Array.isArray(state?.config?.repos) ? state.config.repos : [];
+const AUTOCOMPLETE_LIMIT = 25;
+
+function choices(values, focused) {
+  const needle = focused.toLowerCase();
+  return values
+    .filter((value) => value.toLowerCase().includes(needle))
+    .slice(0, AUTOCOMPLETE_LIMIT)
+    .map((value) => ({ name: value, value }));
 }
 
-function findRepoIndex(repos, owner, repo) {
-  return repos.findIndex(
-    (entry) => entry.owner.toLowerCase() === owner.toLowerCase() && entry.repo.toLowerCase() === repo.toLowerCase()
-  );
+function watchedParent(repos, interaction) {
+  const slug = parseRepoSlug(interaction.options.getString("repo"));
+  const index = slug ? findRepoIndex(repos, slug.owner, slug.repo) : -1;
+  return index === -1 ? null : repos[index];
 }
 
-async function handleAdd({ client, interaction }) {
-  const rawSlug = interaction.options.getString("repo", true);
-  const label = interaction.options.getString("label")?.trim().slice(0, 80) || "";
-  const slug = parseRepoSlug(rawSlug);
-
-  if (!slug) {
-    await interaction.reply({
-      content: "Bitte gib das Repo im Format `owner/repo` an, z.B. `torvalds/linux`.",
-      flags: MessageFlags.Ephemeral
-    });
-    return;
-  }
-
-  const { settingsStore, env } = client.botContext;
-  const repos = getRepos(settingsStore, interaction.guildId);
-
-  if (findRepoIndex(repos, slug.owner, slug.repo) !== -1) {
-    await interaction.reply({
-      content: `\`${slug.owner}/${slug.repo}\` wird bereits beobachtet.`,
-      flags: MessageFlags.Ephemeral
-    });
-    return;
-  }
-
+async function handleAdd({ interaction, settingsStore, env }) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const repoInfo = await fetchRepoInfo(slug.owner, slug.repo, env.githubToken).catch(() => null);
-  if (!repoInfo) {
-    await interaction.editReply({
-      content: `Repo \`${slug.owner}/${slug.repo}\` wurde auf GitHub nicht gefunden.`
-    });
-    return;
-  }
-
-  const baseline = await fetchLatestUpdate(slug.owner, slug.repo, env.githubToken).catch(() => null);
-
-  const state = settingsStore.getModuleState(interaction.guildId, "updates");
-  const currentRepos = getRepos(settingsStore, interaction.guildId);
-  currentRepos.push({
-    owner: slug.owner,
-    repo: slug.repo,
-    label,
-    lastSeenId: baseline?.id || ""
-  });
-
-  settingsStore.setModuleConfig(interaction.guildId, "updates", {
-    ...(state?.config || {}),
-    repos: currentRepos
+  const entry = await addRepo({
+    settingsStore,
+    guildId: interaction.guildId,
+    token: env.githubToken,
+    input: interaction.options.getString("repo", true),
+    label: interaction.options.getString("label")
   });
 
   await interaction.editReply({
-    content: `\`${slug.owner}/${slug.repo}\` wird jetzt beobachtet. Nur zukünftige Updates werden gepostet.`
+    content: `\`${repoKey(entry)}\` wird jetzt beobachtet. Nur zukünftige Updates werden gepostet.\n`
+      + "Forks dazu hinterlegst du mit `/updates-repo fork-add`."
   });
 }
 
-async function handleRemove({ client, interaction }) {
-  const rawSlug = interaction.options.getString("repo", true);
-  const slug = parseRepoSlug(rawSlug);
-  const { settingsStore } = client.botContext;
-  const repos = getRepos(settingsStore, interaction.guildId);
-
-  const index = slug
-    ? findRepoIndex(repos, slug.owner, slug.repo)
-    : repos.findIndex((entry) => `${entry.owner}/${entry.repo}` === rawSlug);
-
-  if (index === -1) {
-    await interaction.reply({
-      content: `\`${rawSlug}\` wird aktuell nicht beobachtet.`,
-      flags: MessageFlags.Ephemeral
-    });
-    return;
-  }
-
-  const [removed] = repos.splice(index, 1);
-  const state = settingsStore.getModuleState(interaction.guildId, "updates");
-  settingsStore.setModuleConfig(interaction.guildId, "updates", {
-    ...(state?.config || {}),
-    repos
+async function handleRemove({ interaction, settingsStore }) {
+  const removed = removeRepo({
+    settingsStore,
+    guildId: interaction.guildId,
+    input: interaction.options.getString("repo", true)
   });
 
+  const forkNote = removed.forks.length > 0 ? ` (samt ${removed.forks.length} Fork(s))` : "";
   await interaction.reply({
-    content: `\`${removed.owner}/${removed.repo}\` wurde entfernt.`,
+    content: `\`${repoKey(removed)}\`${forkNote} wurde entfernt.`,
     flags: MessageFlags.Ephemeral
   });
 }
 
-async function handleList({ client, interaction }) {
-  const { settingsStore } = client.botContext;
+async function handleForkAdd({ interaction, settingsStore, env }) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const { parent, fork } = await addFork({
+    settingsStore,
+    guildId: interaction.guildId,
+    token: env.githubToken,
+    parentInput: interaction.options.getString("repo", true),
+    forkInput: interaction.options.getString("fork", true),
+    branch: interaction.options.getString("branch"),
+    label: interaction.options.getString("label")
+  });
+
+  await interaction.editReply({
+    content: `Fork \`${fork.owner}/${fork.repo}\` (Branch \`${fork.branch}\`) wird zu \`${repoKey(parent)}\` beobachtet.\n`
+      + "Gepostet werden nur eigene Commits des Forks – reines Nachziehen des Originals bleibt still."
+  });
+}
+
+async function handleForkRemove({ interaction, settingsStore }) {
+  const removed = removeFork({
+    settingsStore,
+    guildId: interaction.guildId,
+    parentInput: interaction.options.getString("repo", true),
+    forkInput: interaction.options.getString("fork", true)
+  });
+
+  await interaction.reply({
+    content: `Entfernt: ${removed.map((fork) => `\`${forkKey(fork)}\``).join(", ")}`,
+    flags: MessageFlags.Ephemeral
+  });
+}
+
+async function handleList({ interaction, settingsStore }) {
   const repos = getRepos(settingsStore, interaction.guildId);
 
   if (repos.length === 0) {
@@ -111,21 +105,32 @@ async function handleList({ client, interaction }) {
     return;
   }
 
-  const lines = repos.map((entry) => {
-    const label = entry.label ? ` (${entry.label})` : "";
-    return `• \`${entry.owner}/${entry.repo}\`${label}`;
-  });
+  const lines = repos.flatMap((entry) => [
+    `• \`${repoKey(entry)}\`${entry.label ? ` (${entry.label})` : ""}`,
+    ...entry.forks.map((fork) => `  ↳ Fork \`${fork.owner}/${fork.repo}\` · Branch \`${fork.branch}\`${fork.label ? ` (${fork.label})` : ""}`)
+  ]);
 
   await interaction.reply({
-    content: [`Beobachtete Repos (${repos.length}):`, ...lines].join("\n"),
+    content: [`Beobachtete Repos (${repos.length}):`, ...lines].join("\n").slice(0, 2000),
     flags: MessageFlags.Ephemeral
   });
 }
 
+const HANDLERS = {
+  add: handleAdd,
+  remove: handleRemove,
+  "fork-add": handleForkAdd,
+  "fork-remove": handleForkRemove,
+  list: handleList
+};
+
+const watchedRepoOption = (option) =>
+  option.setName("repo").setDescription("Beobachtetes Repo").setRequired(true).setAutocomplete(true);
+
 export const updatesRepoCommand = {
   data: new SlashCommandBuilder()
     .setName("updates-repo")
-    .setDescription("Verwaltet die beobachteten GitHub-Repos für automatische Updates.")
+    .setDescription("Verwaltet die beobachteten GitHub-Repos und Forks für automatische Updates.")
     .addSubcommand((sub) =>
       sub
         .setName("add")
@@ -140,16 +145,38 @@ export const updatesRepoCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("remove")
-        .setDescription("Entfernt ein Repo von der Update-Liste.")
+        .setDescription("Entfernt ein Repo samt seinen Forks von der Update-Liste.")
+        .addStringOption(watchedRepoOption)
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("fork-add")
+        .setDescription("Beobachtet zusätzlich einen bestimmten Fork eines Repos.")
+        .addStringOption(watchedRepoOption)
         .addStringOption((option) =>
           option
-            .setName("repo")
-            .setDescription("Repo aus der beobachteten Liste")
+            .setName("fork")
+            .setDescription("Fork als benutzer oder benutzer/repo")
             .setRequired(true)
             .setAutocomplete(true)
         )
+        .addStringOption((option) =>
+          option.setName("branch").setDescription("Branch im Fork (Standard: Haupt-Branch des Forks)").setRequired(false)
+        )
+        .addStringOption((option) =>
+          option.setName("label").setDescription("Anzeigename für die Posts (optional)").setRequired(false)
+        )
     )
-    .addSubcommand((sub) => sub.setName("list").setDescription("Zeigt alle beobachteten Repos.")),
+    .addSubcommand((sub) =>
+      sub
+        .setName("fork-remove")
+        .setDescription("Entfernt einen hinterlegten Fork.")
+        .addStringOption(watchedRepoOption)
+        .addStringOption((option) =>
+          option.setName("fork").setDescription("Hinterlegter Fork").setRequired(true).setAutocomplete(true)
+        )
+    )
+    .addSubcommand((sub) => sub.setName("list").setDescription("Zeigt alle beobachteten Repos und Forks.")),
 
   async autocomplete({ client, interaction }) {
     if (!interaction.inGuild()) {
@@ -157,17 +184,29 @@ export const updatesRepoCommand = {
       return;
     }
 
-    const { settingsStore } = client.botContext;
+    const { settingsStore, env } = client.botContext;
     const repos = getRepos(settingsStore, interaction.guildId);
-    const focused = interaction.options.getFocused().toLowerCase();
+    const focused = interaction.options.getFocused(true);
 
-    const choices = repos
-      .map((entry) => `${entry.owner}/${entry.repo}`)
-      .filter((slug) => slug.toLowerCase().includes(focused))
-      .slice(0, 25)
-      .map((slug) => ({ name: slug, value: slug }));
+    if (focused.name === "repo") {
+      await interaction.respond(choices(repos.map(repoKey), focused.value));
+      return;
+    }
 
-    await interaction.respond(choices);
+    const parent = watchedParent(repos, interaction);
+    if (!parent) {
+      await interaction.respond([]);
+      return;
+    }
+
+    if (interaction.options.getSubcommand() === "fork-remove") {
+      await interaction.respond(choices(parent.forks.map(forkKey), focused.value));
+      return;
+    }
+
+    // Discord wartet nur drei Sekunden; die Fork-Liste ist deshalb gecacht.
+    const candidates = await listForkCandidates(parent.owner, parent.repo, env.githubToken).catch(() => []);
+    await interaction.respond(choices(candidates.map((fork) => fork.slug), focused.value));
   },
 
   async execute({ client, interaction }) {
@@ -179,18 +218,18 @@ export const updatesRepoCommand = {
       return;
     }
 
-    const subcommand = interaction.options.getSubcommand();
+    const { settingsStore, env } = client.botContext;
+    const handler = HANDLERS[interaction.options.getSubcommand()] || handleList;
 
-    if (subcommand === "add") {
-      await handleAdd({ client, interaction });
-      return;
+    try {
+      await handler({ interaction, settingsStore, env });
+    } catch (error) {
+      if (!(error instanceof RepoConfigError)) {
+        throw error;
+      }
+
+      const reply = { content: error.message, flags: MessageFlags.Ephemeral };
+      await (interaction.deferred ? interaction.editReply({ content: error.message }) : interaction.reply(reply));
     }
-
-    if (subcommand === "remove") {
-      await handleRemove({ client, interaction });
-      return;
-    }
-
-    await handleList({ client, interaction });
   }
 };

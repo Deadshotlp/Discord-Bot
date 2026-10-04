@@ -10,11 +10,21 @@ export function parseRepoSlug(raw) {
   return { owner: match[1], repo: match[2] };
 }
 
+/**
+ * Liest owner/repo aus einer GitHub-Web-URL. Nach einer Umbenennung leitet
+ * GitHub die alte API-Adresse weiter, die URLs in der Antwort tragen aber
+ * schon den neuen Namen – so erkennt der Bot Umbenennungen ohne Zusatzabfrage.
+ */
+export function repoSlugFromHtmlUrl(url) {
+  const match = String(url || "").match(/^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)(?:[/?#]|$)/i);
+  return match ? { owner: match[1], repo: match[2] } : null;
+}
+
 function buildHeaders(token) {
   const headers = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "thrawns-revenge-discord-bot"
+    "User-Agent": "discord-bot"
   };
 
   if (token) {
@@ -24,12 +34,17 @@ function buildHeaders(token) {
   return headers;
 }
 
-export async function fetchRepoInfo(owner, repo, token) {
-  const response = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}`, {
+// Branch-Namen dürfen "/" enthalten, das muss im Pfad erhalten bleiben.
+function encodeRef(ref) {
+  return String(ref).split("/").map(encodeURIComponent).join("/");
+}
+
+async function githubGet(path, token, { allowNotFound = false } = {}) {
+  const response = await fetch(`${GITHUB_API_BASE}${path}`, {
     headers: buildHeaders(token)
   });
 
-  if (response.status === 404) {
+  if (allowNotFound && response.status === 404) {
     return null;
   }
 
@@ -40,33 +55,49 @@ export async function fetchRepoInfo(owner, repo, token) {
   return response.json();
 }
 
-async function fetchLatestRelease(owner, repo, token) {
-  const response = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/releases/latest`, {
-    headers: buildHeaders(token)
-  });
-
-  if (response.status === 404) {
-    return null;
-  }
-
-  if (!response.ok) {
-    throw new Error(`GitHub API Fehler (${response.status})`);
-  }
-
-  return response.json();
+export function fetchRepoInfo(owner, repo, token) {
+  return githubGet(`/repos/${owner}/${repo}`, token, { allowNotFound: true });
 }
 
-async function fetchLatestCommit(owner, repo, token) {
-  const response = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/commits?per_page=1`, {
-    headers: buildHeaders(token)
-  });
+export function fetchBranch(owner, repo, branch, token) {
+  return githubGet(`/repos/${owner}/${repo}/branches/${encodeRef(branch)}`, token, { allowNotFound: true });
+}
 
-  if (!response.ok) {
-    throw new Error(`GitHub API Fehler (${response.status})`);
-  }
+export async function fetchForks(owner, repo, token) {
+  const forks = await githubGet(`/repos/${owner}/${repo}/forks?sort=newest&per_page=100`, token);
+  return Array.isArray(forks) ? forks : [];
+}
 
-  const commits = await response.json();
+/**
+ * Vergleicht zwei Stände im selben Fork-Netzwerk. `head` darf auf einen Fork
+ * zeigen ("benutzer:branch"). `commits` enthält dann genau die Commits, die
+ * im Fork liegen, im Original aber nicht.
+ */
+export function fetchCompare(owner, repo, base, head, token) {
+  return githubGet(`/repos/${owner}/${repo}/compare/${encodeRef(base)}...${encodeRef(head)}`, token);
+}
+
+function fetchLatestRelease(owner, repo, token) {
+  return githubGet(`/repos/${owner}/${repo}/releases/latest`, token, { allowNotFound: true });
+}
+
+export async function fetchLatestCommit(owner, repo, token, branch = "") {
+  const query = branch ? `&sha=${encodeURIComponent(branch)}` : "";
+  const commits = await githubGet(`/repos/${owner}/${repo}/commits?per_page=1${query}`, token);
   return commits?.[0] || null;
+}
+
+export function toCommitUpdate(commit) {
+  return {
+    type: "commit",
+    id: commit.sha,
+    title: (commit.commit?.message || "").split("\n")[0] || commit.sha.slice(0, 7),
+    version: commit.sha.slice(0, 7),
+    url: commit.html_url,
+    body: commit.commit?.message || "",
+    author: commit.commit?.author?.name || commit.author?.login || "",
+    publishedAt: commit.commit?.author?.date || null
+  };
 }
 
 export async function fetchLatestUpdate(owner, repo, token) {
@@ -85,18 +116,5 @@ export async function fetchLatestUpdate(owner, repo, token) {
   }
 
   const commit = await fetchLatestCommit(owner, repo, token);
-  if (!commit) {
-    return null;
-  }
-
-  return {
-    type: "commit",
-    id: commit.sha,
-    title: (commit.commit?.message || "").split("\n")[0] || commit.sha.slice(0, 7),
-    version: commit.sha.slice(0, 7),
-    url: commit.html_url,
-    body: commit.commit?.message || "",
-    author: commit.commit?.author?.name || commit.author?.login || "",
-    publishedAt: commit.commit?.author?.date || null
-  };
+  return commit ? toCommitUpdate(commit) : null;
 }

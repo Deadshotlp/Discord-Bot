@@ -1,4 +1,4 @@
-# Thrawn's Revenge Discord Bot
+# Discord Bot
 
 Modularer Discord-Bot für Community- und Gameserver-Betrieb. Die Konfiguration
 läuft vollständig über ein Web-Dashboard – in Discord gibt es kein Setup-Panel
@@ -62,6 +62,28 @@ Zustand liegt in `data/`:
 
 - `bot.db` – Modul-Einstellungen, Monitoring, Abmeldungen, Steam-Links, Sessions, Audit
 - `support-tickets.db`, `support-cases.db`, `meetings.db`, `weekly-reports.db` – Fachdaten
+
+## Zeitzone
+
+Der Bot rechnet durchgehend mit lokaler Zeit: Tagesgrenzen von Abmeldungen,
+Meeting-Termine, Veröffentlichung der Wochenberichte, Tagesprofile im
+Monitoring. Im Container ist die Systemzeit üblicherweise UTC – ohne Angabe
+wäre also alles ein bis zwei Stunden verschoben.
+
+```dotenv
+BOT_TIMEZONE=Europe/Berlin
+```
+
+Das ist die Vorgabe; ein anderer Wert muss ein gültiger IANA-Name sein
+(`Europe/Vienna`, `America/New_York` …). Ein fester Versatz wie `+01:00` wird
+absichtlich nicht unterstützt: `Europe/Berlin` deckt MEZ (+1) und MESZ (+2)
+samt Umstellungsterminen ab, ein fester Wert wäre im Sommer eine Stunde daneben.
+
+Beim Start schreibt der Bot die geltende Zeitzone ins Log:
+
+```text
+Zeitzone {"timezone":"Europe/Berlin","offset":"+02:00","localTime":"30.08.26, 20:15"}
+```
 
 Über `DATA_DIR` lässt sich ein anderes Verzeichnis setzen, z. B. ein
 persistentes Volume. Eine vorhandene `data/module-config.json` aus der
@@ -236,6 +258,14 @@ Befehle: `/meeting anmelden|abmelden|thema|status`
 
 - `/updates-repo add owner/repo` beobachtet GitHub-Releases; beim Hinzufügen wird
   der aktuelle Stand als Basislinie gespeichert.
+- `/updates-repo fork-add repo:owner/repo fork:benutzer [branch]` hinterlegt
+  zusätzlich einen bestimmten Fork. Gepostet werden nur Commits, die es im
+  Original nicht gibt – zieht ein Fork bloß den Stand des Originals nach, bleibt
+  es still. Ohne `branch` gilt der Haupt-Branch des Forks. Entfernen mit
+  `/updates-repo fork-remove`; alles auch im Dashboard unter *Einstellungen →
+  GitHub-Updates*.
+- Wird ein beobachtetes Repo auf GitHub umbenannt, übernimmt der Bot den neuen
+  Namen beim nächsten Abruf selbst.
 - `/changelog` öffnet ein Formular für manuelle Ankündigungen.
 - Content-Creator-Kanäle werden im Dashboard gepflegt; Profile werden gegen die
   YouTube-/Twitch-API aufgelöst. Dafür sind `YOUTUBE_API_KEY` bzw.
