@@ -58,7 +58,7 @@ export function registerUpdatesRoutes(router, { client }) {
   router.post("/api/guilds/:guildId/updates/repos", async (ctx) => {
     requireLevel(ctx.access, ACCESS_LEVELS.admin);
 
-    const entry = await run(() => addRepo({
+    const { entry, updated } = await run(() => addRepo({
       settingsStore,
       guildId: ctx.params.guildId,
       token: env.githubToken,
@@ -67,7 +67,7 @@ export function registerUpdatesRoutes(router, { client }) {
       branch: ctx.body.branch
     }));
 
-    audit(ctx, "updates.repo.add", { repo: `${entry.owner}/${entry.repo}` });
+    audit(ctx, updated ? "updates.repo.update" : "updates.repo.add", { repo: `${entry.owner}/${entry.repo}`, branch: entry.branch });
     sendJson(ctx.res, 200, publicRepos(getRepos(settingsStore, ctx.params.guildId)));
   });
 

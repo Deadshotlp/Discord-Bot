@@ -448,7 +448,7 @@ function updatesReposCard(guildId, guild, repos, refresh) {
       picker.element,
       field("Anzeigename", h("input.input", { name: "label", maxLength: 80 }), "Optional, erscheint im Titel der Posts")), {
       submitLabel: "Hinzufügen",
-      onSubmit: (data) => submit(() => api.addUpdateRepo(guildId, data), "Repo wird beobachtet.")
+      onSubmit: (data) => submit(() => api.addUpdateRepo(guildId, data), "Repo gespeichert.")
     });
   };
 
