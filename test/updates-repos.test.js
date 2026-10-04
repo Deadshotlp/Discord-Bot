@@ -4,10 +4,12 @@ import assert from "node:assert/strict";
 import { repoSlugFromHtmlUrl } from "../src/modules/updates/services/github.js";
 import {
   forkKey,
+  listBranchesFor,
   normalizeRepos,
   parseForkInput,
   removeFork,
-  selectNewForkCommits
+  selectNewForkCommits,
+  sortBranches
 } from "../src/modules/updates/services/repos.js";
 import { buildForkUpdateEmbed } from "../src/modules/updates/services/embeds.js";
 
@@ -110,4 +112,38 @@ test("das Fork-Embed listet mehrere Commits, neueste zuerst", () => {
   assert.equal(embed.url, "https://github.com/Deadshotlp/gamemodes/compare/main...Bob:dev");
   assert.ok(embed.description.indexOf("Zweiter") < embed.description.indexOf("Erster"));
   assert.equal(embed.fields.find((f) => f.name === "Vorsprung").value, "5 Commits");
+});
+
+test("Branches: Haupt-Branch zuerst, Rest alphabetisch", () => {
+  assert.deepEqual(sortBranches(["feature/z", "dev", "main", "Alpha"], "main"), ["main", "Alpha", "dev", "feature/z"]);
+});
+
+test("Branch-Abfrage fragt den eingegebenen Fork ab, ohne Fork das Repo selbst", async (t) => {
+  const requested = [];
+  t.mock.method(globalThis, "fetch", async (url) => {
+    requested.push(String(url));
+    const body = String(url).endsWith("/branches?per_page=100")
+      ? [{ name: "dev" }, { name: "master" }, { name: "balance" }]
+      : { full_name: String(url).split("/repos/")[1], default_branch: "master" };
+    return { ok: true, status: 200, json: async () => body };
+  });
+
+  const store = fakeStore([{ ...parent, forks: [] }]);
+  const forkResult = await listBranchesFor({
+    settingsStore: store, guildId: "g", token: "", parentInput: "Deadshotlp/gamemodes", forkInput: "Branchtester"
+  });
+
+  assert.equal(forkResult.repo, "Branchtester/gamemodes");
+  assert.deepEqual(forkResult.branches, ["master", "balance", "dev"]);
+  assert.ok(requested.every((url) => url.includes("/repos/Branchtester/gamemodes")));
+
+  const ownResult = await listBranchesFor({
+    settingsStore: store, guildId: "g", token: "", parentInput: "Deadshotlp/gamemodes", forkInput: ""
+  });
+  assert.equal(ownResult.repo, "Deadshotlp/gamemodes");
+
+  await assert.rejects(
+    listBranchesFor({ settingsStore: store, guildId: "g", token: "", parentInput: "x/y", forkInput: "Bob" }),
+    /nicht beobachtet/
+  );
 });

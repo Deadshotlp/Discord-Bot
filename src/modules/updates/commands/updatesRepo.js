@@ -8,10 +8,13 @@ import {
   findRepoIndex,
   forkKey,
   getRepos,
+  listBranches,
+  listBranchesFor,
   listForkCandidates,
   removeFork,
   removeRepo,
-  repoKey
+  repoKey,
+  setRepoBranch
 } from "../services/repos.js";
 
 const AUTOCOMPLETE_LIMIT = 25;
@@ -30,6 +33,10 @@ function watchedParent(repos, interaction) {
   return index === -1 ? null : repos[index];
 }
 
+function describeWatching(entry) {
+  return entry.branch ? ` (Releases und Commits auf \`${entry.branch}\`)` : "";
+}
+
 async function handleAdd({ interaction, settingsStore, env }) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -38,12 +45,31 @@ async function handleAdd({ interaction, settingsStore, env }) {
     guildId: interaction.guildId,
     token: env.githubToken,
     input: interaction.options.getString("repo", true),
-    label: interaction.options.getString("label")
+    label: interaction.options.getString("label"),
+    branch: interaction.options.getString("branch")
   });
 
   await interaction.editReply({
-    content: `\`${repoKey(entry)}\` wird jetzt beobachtet. Nur zukünftige Updates werden gepostet.\n`
+    content: `\`${repoKey(entry)}\` wird jetzt beobachtet${describeWatching(entry)}. Nur zukünftige Updates werden gepostet.\n`
       + "Forks dazu hinterlegst du mit `/updates-repo fork-add`."
+  });
+}
+
+async function handleBranch({ interaction, settingsStore, env }) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const entry = await setRepoBranch({
+    settingsStore,
+    guildId: interaction.guildId,
+    token: env.githubToken,
+    input: interaction.options.getString("repo", true),
+    branch: interaction.options.getString("branch")
+  });
+
+  await interaction.editReply({
+    content: entry.branch
+      ? `\`${repoKey(entry)}\`: Releases und neue Commits auf \`${entry.branch}\` werden gepostet.`
+      : `\`${repoKey(entry)}\`: wieder Standard – neue Releases, ohne Releases Commits auf dem Haupt-Branch.`
   });
 }
 
@@ -106,7 +132,7 @@ async function handleList({ interaction, settingsStore }) {
   }
 
   const lines = repos.flatMap((entry) => [
-    `• \`${repoKey(entry)}\`${entry.label ? ` (${entry.label})` : ""}`,
+    `• \`${repoKey(entry)}\`${entry.branch ? ` · Branch \`${entry.branch}\`` : ""}${entry.label ? ` (${entry.label})` : ""}`,
     ...entry.forks.map((fork) => `  ↳ Fork \`${fork.owner}/${fork.repo}\` · Branch \`${fork.branch}\`${fork.label ? ` (${fork.label})` : ""}`)
   ]);
 
@@ -118,11 +144,72 @@ async function handleList({ interaction, settingsStore }) {
 
 const HANDLERS = {
   add: handleAdd,
+  branch: handleBranch,
   remove: handleRemove,
   "fork-add": handleForkAdd,
   "fork-remove": handleForkRemove,
   list: handleList
 };
+
+/**
+ * Lädt die Branches, um die es im gerade getippten Befehl geht:
+ * add → das eingegebene Repo, branch → das beobachtete Repo,
+ * fork-add → der gewählte Fork. Ein String ist ein Hinweis, was noch fehlt.
+ */
+async function loadBranchesForCommand({ interaction, settingsStore, env, repos }) {
+  const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand === "add") {
+    const slug = parseRepoSlug(interaction.options.getString("repo"));
+    return slug ? listBranches(slug.owner, slug.repo, env.githubToken) : "Erst das Repo als owner/repo eingeben";
+  }
+
+  const parent = watchedParent(repos, interaction);
+  if (!parent) {
+    return "Erst ein beobachtetes Repo auswählen";
+  }
+
+  if (subcommand === "branch") {
+    return listBranches(parent.owner, parent.repo, env.githubToken);
+  }
+
+  const forkInput = interaction.options.getString("fork");
+  if (!forkInput) {
+    return "Erst einen Fork auswählen";
+  }
+
+  return listBranchesFor({
+    settingsStore,
+    guildId: interaction.guildId,
+    token: env.githubToken,
+    parentInput: repoKey(parent),
+    forkInput
+  });
+}
+
+/** Branches als Vorschläge, Haupt-Branch zuerst und markiert. */
+async function respondWithBranches({ interaction, settingsStore, env, repos, focused }) {
+  const result = await loadBranchesForCommand({ interaction, settingsStore, env, repos }).catch(() => null);
+
+  if (typeof result === "string") {
+    await interaction.respond([{ name: result, value: focused.value || "-" }]);
+    return;
+  }
+
+  if (!result) {
+    await interaction.respond([]);
+    return;
+  }
+
+  const needle = focused.value.toLowerCase();
+  await interaction.respond(result.branches
+    .filter((name) => name.toLowerCase().includes(needle))
+    .slice(0, AUTOCOMPLETE_LIMIT)
+    .map((name) => ({
+      name: (name === result.defaultBranch ? `${name} (Haupt-Branch)` : name).slice(0, 100),
+      value: name.slice(0, 100)
+    })));
+}
 
 const watchedRepoOption = (option) =>
   option.setName("repo").setDescription("Beobachtetes Repo").setRequired(true).setAutocomplete(true);
@@ -140,6 +227,26 @@ export const updatesRepoCommand = {
         )
         .addStringOption((option) =>
           option.setName("label").setDescription("Anzeigename für die Update-Posts (optional)").setRequired(false)
+        )
+        .addStringOption((option) =>
+          option
+            .setName("branch")
+            .setDescription("Zusätzlich zu Releases neue Commits auf diesem Branch posten (optional)")
+            .setRequired(false)
+            .setAutocomplete(true)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("branch")
+        .setDescription("Legt fest, auf welchem Branch eines Repos neue Commits gepostet werden.")
+        .addStringOption(watchedRepoOption)
+        .addStringOption((option) =>
+          option
+            .setName("branch")
+            .setDescription("Leer lassen = zurück zum Standard (Releases bzw. Haupt-Branch)")
+            .setRequired(false)
+            .setAutocomplete(true)
         )
     )
     .addSubcommand((sub) =>
@@ -161,7 +268,11 @@ export const updatesRepoCommand = {
             .setAutocomplete(true)
         )
         .addStringOption((option) =>
-          option.setName("branch").setDescription("Branch im Fork (Standard: Haupt-Branch des Forks)").setRequired(false)
+          option
+            .setName("branch")
+            .setDescription("Branch im Fork (Standard: Haupt-Branch des Forks)")
+            .setRequired(false)
+            .setAutocomplete(true)
         )
         .addStringOption((option) =>
           option.setName("label").setDescription("Anzeigename für die Posts (optional)").setRequired(false)
@@ -190,6 +301,11 @@ export const updatesRepoCommand = {
 
     if (focused.name === "repo") {
       await interaction.respond(choices(repos.map(repoKey), focused.value));
+      return;
+    }
+
+    if (focused.name === "branch") {
+      await respondWithBranches({ interaction, settingsStore, env, repos, focused });
       return;
     }
 

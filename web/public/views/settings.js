@@ -378,6 +378,49 @@ function creatorsCard(guildId, guild, creators, refresh) {
   return card("Content-Creator-Benachrichtigungen", form);
 }
 
+let branchPickerCount = 0;
+
+/**
+ * Branch-Eingabe mit Vorschlagsliste von GitHub. `load(value)` holt die
+ * Branches zu dem, was gerade im zugehörigen Feld steht; `refresh(value)` wird
+ * aufgerufen, sobald das feststeht (Fork oder Repo eingegeben).
+ */
+function branchPicker({ load, value = "", placeholder, idleHint }) {
+  const listId = `branch-options-${++branchPickerCount}`;
+  const list = h("datalist", { id: listId });
+  const hint = h("span", {}, idleHint);
+  const input = h("input.input", { name: "branch", list: listId, placeholder, value });
+
+  let loadedFor = null;
+  const refresh = async (source) => {
+    const key = String(source ?? "").trim();
+    if (key === loadedFor) {
+      return;
+    }
+
+    loadedFor = key;
+    clear(list);
+    hint.textContent = "Lade Branches …";
+
+    try {
+      const result = await load(key);
+      if (loadedFor !== key) {
+        return;
+      }
+
+      list.append(...result.branches.map((name) =>
+        h("option", { value: name, label: name === result.defaultBranch ? `${name} (Haupt-Branch)` : name })));
+      hint.textContent = `${result.branches.length} Branch(es) in ${result.repo} – Haupt-Branch: ${result.defaultBranch}`;
+    } catch (error) {
+      if (loadedFor === key) {
+        hint.textContent = error.message;
+      }
+    }
+  };
+
+  return { element: h("div", {}, field("Branch", input, hint), list), refresh };
+}
+
 function updatesReposCard(guildId, guild, repos, refresh) {
   const isAdmin = guild.accessLevel >= ACCESS.ADMIN;
   const slugOf = (entry) => `${entry.owner}/${entry.repo}`;
@@ -388,22 +431,68 @@ function updatesReposCard(guildId, guild, repos, refresh) {
     await refresh();
   };
 
-  const addRepo = () => modal("Repo beobachten", h("div", {},
-    field("Repo", h("input.input", { name: "repo", required: true, placeholder: "owner/repo oder GitHub-Link" })),
-    field("Anzeigename", h("input.input", { name: "label", maxLength: 80 }), "Optional, erscheint im Titel der Posts")), {
-    submitLabel: "Hinzufügen",
-    onSubmit: (data) => submit(() => api.addUpdateRepo(guildId, data), "Repo wird beobachtet.")
-  });
+  const addRepo = () => {
+    const picker = branchPicker({
+      load: (repo) => api.githubBranches(guildId, repo),
+      placeholder: "leer = nur Releases bzw. Haupt-Branch",
+      idleHint: "Optional: neue Commits auf diesem Branch zusätzlich zu Releases posten"
+    });
+
+    modal("Repo beobachten", h("div", {},
+      field("Repo", h("input.input", {
+        name: "repo",
+        required: true,
+        placeholder: "owner/repo oder GitHub-Link",
+        onChange: (event) => event.target.value.trim() && picker.refresh(event.target.value)
+      })),
+      picker.element,
+      field("Anzeigename", h("input.input", { name: "label", maxLength: 80 }), "Optional, erscheint im Titel der Posts")), {
+      submitLabel: "Hinzufügen",
+      onSubmit: (data) => submit(() => api.addUpdateRepo(guildId, data), "Repo wird beobachtet.")
+    });
+  };
+
+  const editBranch = (entry) => {
+    const picker = branchPicker({
+      load: () => api.updateBranches(guildId, slugOf(entry)),
+      value: entry.branch,
+      placeholder: "leer = Standard (Releases bzw. Haupt-Branch)",
+      idleHint: ""
+    });
+
+    modal(`Branch für ${slugOf(entry)}`, h("div", {},
+      h("p.muted", { style: { fontSize: "13px" } },
+        "Mit Branch werden Releases weiter gepostet und neue Commits auf dem Branch zusätzlich. "
+        + "Ohne Branch: neue Releases, bei Repos ohne Releases Commits auf dem Haupt-Branch."),
+      picker.element), {
+      onSubmit: (data) => submit(
+        () => api.setUpdateRepoBranch(guildId, slugOf(entry), data.branch),
+        data.branch ? `Branch ${data.branch} wird beobachtet.` : "Zurück zum Standard.")
+    });
+
+    picker.refresh("");
+  };
 
   const addFork = async (entry) => {
     const listId = `fork-candidates-${entry.owner}-${entry.repo}`.replace(/[^\w-]/g, "_");
     const candidates = h("datalist", { id: listId });
+    const picker = branchPicker({
+      load: (fork) => api.updateBranches(guildId, slugOf(entry), fork),
+      placeholder: "leer = Haupt-Branch des Forks",
+      idleHint: "Erst Fork wählen – dann stehen hier seine Branches zur Auswahl"
+    });
 
     modal(`Fork zu ${slugOf(entry)} hinterlegen`, h("div", {},
-      field("Fork", h("input.input", { name: "fork", required: true, list: listId, placeholder: "benutzer oder benutzer/repo" }),
-        "Gepostet werden nur Commits, die es im Original nicht gibt"),
+      field("Fork", h("input.input", {
+        name: "fork",
+        required: true,
+        list: listId,
+        placeholder: "benutzer oder benutzer/repo",
+        // Branches erst laden, wenn feststeht, welcher Fork gemeint ist.
+        onChange: (event) => event.target.value.trim() && picker.refresh(event.target.value)
+      }), "Gepostet werden nur Commits, die es im Original nicht gibt"),
       candidates,
-      field("Branch", h("input.input", { name: "branch", placeholder: "leer = Haupt-Branch des Forks" })),
+      picker.element,
       field("Anzeigename", h("input.input", { name: "label", maxLength: 80 }))), {
       submitLabel: "Hinterlegen",
       onSubmit: (data) => submit(() => api.addUpdateFork(guildId, slugOf(entry), data), "Fork hinterlegt.")
@@ -418,9 +507,12 @@ function updatesReposCard(guildId, guild, repos, refresh) {
     [
       h("strong", {}, slugOf(entry)),
       entry.label || "–",
-      "Repo",
+      entry.branch
+        ? h("span.mono", { style: { fontSize: "12px" } }, entry.branch)
+        : h("span.muted", {}, "Releases / Haupt-Branch"),
       isAdmin
         ? h("div.row", {},
+          h("button.btn.btn-sm", { onClick: () => editBranch(entry) }, "Branch"),
           h("button.btn.btn-sm", { onClick: () => addFork(entry) }, "+ Fork"),
           h("button.btn.btn-sm.btn-danger", {
             onClick: async () => {
@@ -450,8 +542,8 @@ function updatesReposCard(guildId, guild, repos, refresh) {
       h("span", {}, "GitHub-Updates"),
       isAdmin ? h("button.btn.btn-sm.btn-primary", { onClick: addRepo }, "+ Repo") : null),
     h("p.muted", { style: { fontSize: "13px" } },
-      "Neue Releases bzw. Commits landen im Updates-Channel. Zu jedem Repo lassen sich bestimmte Forks "
-      + "hinterlegen – deren eigene Änderungen werden ebenfalls gepostet."),
+      "Neue Releases bzw. Commits landen im Updates-Channel. Je Repo lässt sich ein Branch wählen, dessen "
+      + "Commits zusätzlich gepostet werden, und es lassen sich bestimmte Forks hinterlegen."),
     table(["Repo / Fork", "Anzeigename", "Branch", ""], rows, { empty: "Noch kein Repo hinterlegt." }));
 }
 

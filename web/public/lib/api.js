@@ -105,6 +105,12 @@ export const api = {
   addUpdateRepo: (guildId, data) => request("POST", `/api/guilds/${guildId}/updates/repos`, data),
   removeUpdateRepo: (guildId, slug) => request("DELETE", `/api/guilds/${guildId}/updates/repos/${slug}`, {}),
   forkCandidates: (guildId, slug) => request("GET", `/api/guilds/${guildId}/updates/repos/${slug}/fork-candidates`),
+  setUpdateRepoBranch: (guildId, slug, branch) =>
+    request("PATCH", `/api/guilds/${guildId}/updates/repos/${slug}`, { branch }),
+  githubBranches: (guildId, repo) =>
+    request("GET", `/api/guilds/${guildId}/updates/branches?repo=${encodeURIComponent(repo)}`),
+  updateBranches: (guildId, slug, fork = "") =>
+    request("GET", `/api/guilds/${guildId}/updates/repos/${slug}/branches?fork=${encodeURIComponent(fork)}`),
   addUpdateFork: (guildId, slug, data) => request("POST", `/api/guilds/${guildId}/updates/repos/${slug}/forks`, data),
   removeUpdateFork: (guildId, slug, fork) =>
     request("DELETE", `/api/guilds/${guildId}/updates/repos/${slug}/forks/${encodeURIComponent(fork)}`, {}),

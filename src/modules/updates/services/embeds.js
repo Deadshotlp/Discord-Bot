@@ -28,35 +28,25 @@ export function buildRepoUpdateEmbed(repoEntry, update) {
   return embed;
 }
 
-const FORK_COMMIT_LIST_LIMIT = 10;
+const COMMIT_LIST_LIMIT = 10;
 
 function commitHeadline(commit) {
   return (commit.commit?.message || "").split("\n")[0] || commit.sha.slice(0, 7);
 }
 
+function commitCountLabel(count) {
+  return count === 1 ? "Neuer Commit" : `${count} neue Commits`;
+}
+
 /**
- * `commits` sind die neuen Fork-eigenen Commits, älteste zuerst. `aheadBy`
- * ist der gesamte Vorsprung des Forks vor dem Original (null = unbekannt).
+ * Gemeinsamer Teil für Commit-Posts: Link, Beschreibung, Autor, Zeitpunkt.
+ * `commits` sind älteste zuerst, so liefert sie die Compare-API.
  */
-export function buildForkUpdateEmbed(repoEntry, fork, { commits, aheadBy = null, compareUrl = "" }) {
-  const parentName = repoEntry.label || `${repoEntry.owner}/${repoEntry.repo}`;
-  const displayName = fork.label || `${parentName} · Fork von ${fork.owner}`;
+function applyCommits(embed, commits, compareUrl) {
   const newest = commits[commits.length - 1];
   const single = commits.length === 1;
 
-  const embed = new EmbedBuilder()
-    .setColor(0x8957e5)
-    .setTitle(`${displayName} — ${single ? "Neuer Commit" : `${commits.length} neue Commits`}`)
-    .setURL(single || !compareUrl ? newest.html_url : compareUrl)
-    .addFields(
-      { name: "Fork von", value: `${repoEntry.owner}/${repoEntry.repo}`, inline: true },
-      { name: "Branch", value: fork.branch || "-", inline: true }
-    )
-    .setFooter({ text: `${fork.owner}/${fork.repo}` });
-
-  if (aheadBy !== null) {
-    embed.addFields({ name: "Vorsprung", value: `${aheadBy} Commit${aheadBy === 1 ? "" : "s"}`, inline: true });
-  }
+  embed.setURL(single || !compareUrl ? newest.html_url : compareUrl);
 
   if (single) {
     const author = newest.commit?.author?.name || newest.author?.login;
@@ -68,7 +58,7 @@ export function buildForkUpdateEmbed(repoEntry, fork, { commits, aheadBy = null,
       .slice(0, DESCRIPTION_MAX_LENGTH));
   } else {
     // Neueste zuerst, wie man es von einem Changelog erwartet.
-    const shown = commits.slice(-FORK_COMMIT_LIST_LIMIT).reverse();
+    const shown = commits.slice(-COMMIT_LIST_LIMIT).reverse();
     const lines = shown.map((commit) => {
       const author = commit.commit?.author?.name || commit.author?.login;
       return `[\`${commit.sha.slice(0, 7)}\`](${commit.html_url}) ${commitHeadline(commit)}${author ? ` — ${author}` : ""}`;
@@ -87,6 +77,43 @@ export function buildForkUpdateEmbed(repoEntry, fork, { commits, aheadBy = null,
   }
 
   return embed;
+}
+
+/** Neue Commits auf dem gewählten Branch eines beobachteten Repos. */
+export function buildBranchUpdateEmbed(repoEntry, { commits, compareUrl = "" }) {
+  const displayName = repoEntry.label || `${repoEntry.owner}/${repoEntry.repo}`;
+
+  const embed = new EmbedBuilder()
+    .setColor(0x2ea043)
+    .setTitle(`${displayName} — ${commitCountLabel(commits.length)} auf ${repoEntry.branch}`)
+    .addFields({ name: "Branch", value: repoEntry.branch, inline: true })
+    .setFooter({ text: `${repoEntry.owner}/${repoEntry.repo}` });
+
+  return applyCommits(embed, commits, compareUrl);
+}
+
+/**
+ * `commits` sind die neuen Fork-eigenen Commits, älteste zuerst. `aheadBy`
+ * ist der gesamte Vorsprung des Forks vor dem Original (null = unbekannt).
+ */
+export function buildForkUpdateEmbed(repoEntry, fork, { commits, aheadBy = null, compareUrl = "" }) {
+  const parentName = repoEntry.label || `${repoEntry.owner}/${repoEntry.repo}`;
+  const displayName = fork.label || `${parentName} · Fork von ${fork.owner}`;
+
+  const embed = new EmbedBuilder()
+    .setColor(0x8957e5)
+    .setTitle(`${displayName} — ${commitCountLabel(commits.length)}`)
+    .addFields(
+      { name: "Fork von", value: `${repoEntry.owner}/${repoEntry.repo}`, inline: true },
+      { name: "Branch", value: fork.branch || "-", inline: true }
+    )
+    .setFooter({ text: `${fork.owner}/${fork.repo}` });
+
+  if (aheadBy !== null) {
+    embed.addFields({ name: "Vorsprung", value: `${aheadBy} Commit${aheadBy === 1 ? "" : "s"}`, inline: true });
+  }
+
+  return applyCommits(embed, commits, compareUrl);
 }
 
 const ROMAN_NUMERALS = [

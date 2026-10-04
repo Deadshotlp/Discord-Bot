@@ -1,14 +1,16 @@
 import {
   fetchBranch,
+  fetchBranches,
   fetchForks,
   fetchLatestCommit,
+  fetchLatestReleaseUpdate,
   fetchLatestUpdate,
   fetchRepoInfo,
   parseRepoSlug
 } from "./github.js";
 
 const LABEL_MAX_LENGTH = 80;
-const FORK_CACHE_TTL_MS = 5 * 60 * 1000;
+const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /** Fehler mit einer Meldung, die direkt an Nutzer gehen darf. */
 export class RepoConfigError extends Error {}
@@ -45,7 +47,9 @@ export function normalizeRepos(raw) {
     .map((entry) => ({
       ...entry,
       label: cleanLabel(entry.label),
+      branch: String(entry.branch || ""),
       lastSeenId: String(entry.lastSeenId || ""),
+      lastSeenCommit: String(entry.lastSeenCommit || ""),
       forks: (Array.isArray(entry.forks) ? entry.forks : []).map(normalizeFork).filter(Boolean)
     }));
 }
@@ -105,7 +109,43 @@ export function selectNewForkCommits(ownCommits, lastSeenId) {
   return index === -1 ? ownCommits : ownCommits.slice(index + 1);
 }
 
-export async function addRepo({ settingsStore, guildId, token, input, label }) {
+/**
+ * Markiert "Repo hatte beim Festlegen des Stands kein Release". So wird das
+ * erste Release später gepostet, während ein leerer Wert ("Stand noch
+ * unbekannt") nur still übernommen wird.
+ */
+export const NO_RELEASE = "keins";
+
+/**
+ * Ausgangsstand, ab dem gepostet wird. Ohne Branch wie gehabt: neuestes
+ * Release, sonst neuester Commit des Haupt-Branches. Mit Branch werden
+ * Releases und Commits auf dem Branch getrennt verfolgt.
+ */
+async function repoBaseline(owner, repo, branch, token) {
+  if (!branch) {
+    const latest = await fetchLatestUpdate(owner, repo, token).catch(() => null);
+    return { lastSeenId: latest?.id || "", lastSeenCommit: "" };
+  }
+
+  const [release, commit] = await Promise.all([
+    // undefined = Abruf fehlgeschlagen, null = es gibt kein Release.
+    fetchLatestReleaseUpdate(owner, repo, token).catch(() => undefined),
+    fetchLatestCommit(owner, repo, token, branch).catch(() => null)
+  ]);
+
+  return {
+    lastSeenId: release === undefined ? "" : (release?.id || NO_RELEASE),
+    lastSeenCommit: commit?.sha || ""
+  };
+}
+
+async function requireBranch(owner, repo, branch, token) {
+  if (branch && !(await fetchBranch(owner, repo, branch, token).catch(() => null))) {
+    throw new RepoConfigError(`Branch \`${branch}\` gibt es in \`${owner}/${repo}\` nicht.`);
+  }
+}
+
+export async function addRepo({ settingsStore, guildId, token, input, label, branch }) {
   const slug = parseRepoSlug(input);
 
   if (!slug) {
@@ -124,16 +164,39 @@ export async function addRepo({ settingsStore, guildId, token, input, label }) {
   // Bei umbenannten Repos gleich den aktuellen Namen speichern.
   const owner = info.owner?.login || slug.owner;
   const repo = info.name || slug.repo;
-  const baseline = await fetchLatestUpdate(owner, repo, token).catch(() => null);
+  const branchName = String(branch || "").trim();
+
+  await requireBranch(owner, repo, branchName, token);
+  const baseline = await repoBaseline(owner, repo, branchName, token);
 
   const repos = getRepos(settingsStore, guildId);
   if (findRepoIndex(repos, owner, repo) !== -1) {
     throw new RepoConfigError(`\`${owner}/${repo}\` wird bereits beobachtet.`);
   }
 
-  const entry = { owner, repo, label: cleanLabel(label), lastSeenId: baseline?.id || "", forks: [] };
+  const entry = { owner, repo, label: cleanLabel(label), branch: branchName, ...baseline, forks: [] };
   saveRepos(settingsStore, guildId, [...repos, entry]);
   return entry;
+}
+
+/**
+ * Setzt oder entfernt (leerer Branch) den beobachteten Branch eines Repos.
+ * Der Ausgangsstand wird neu gesetzt, damit der Wechsel keine alten Commits
+ * in den Kanal spült.
+ */
+export async function setRepoBranch({ settingsStore, guildId, token, input, branch }) {
+  const watched = getRepos(settingsStore, guildId);
+  const current = watched[findWatchedRepo(watched, input)];
+  const branchName = String(branch || "").trim();
+
+  await requireBranch(current.owner, current.repo, branchName, token);
+  const baseline = await repoBaseline(current.owner, current.repo, branchName, token);
+
+  const repos = getRepos(settingsStore, guildId);
+  const target = repos[findWatchedRepo(repos, repoKey(current))];
+  Object.assign(target, { branch: branchName, ...baseline });
+  saveRepos(settingsStore, guildId, repos);
+  return target;
 }
 
 export function removeRepo({ settingsStore, guildId, input }) {
@@ -225,24 +288,84 @@ export function removeFork({ settingsStore, guildId, parentInput, forkInput }) {
   return removed;
 }
 
-const forkCache = new Map();
+// Discord gibt Autovervollständigungen nur drei Sekunden; Listen von GitHub
+// werden deshalb kurz zwischengespeichert. Das schont auch das API-Kontingent.
+const githubCache = new Map();
 
-/** Forks eines Repos laut GitHub, für Autovervollständigung und Dashboard. */
-export async function listForkCandidates(owner, repo, token) {
-  const key = `${owner}/${repo}`.toLowerCase();
-  const cached = forkCache.get(key);
+async function cached(key, load) {
+  const entry = githubCache.get(key);
 
-  if (cached && Date.now() - cached.at < FORK_CACHE_TTL_MS) {
-    return cached.forks;
+  if (entry && Date.now() - entry.at < GITHUB_CACHE_TTL_MS) {
+    return entry.value;
   }
 
-  const forks = (await fetchForks(owner, repo, token)).map((fork) => ({
-    slug: fork.full_name,
-    owner: fork.owner?.login || "",
-    defaultBranch: fork.default_branch || "",
-    pushedAt: fork.pushed_at || null
-  }));
+  const value = await load();
+  githubCache.set(key, { at: Date.now(), value });
+  return value;
+}
 
-  forkCache.set(key, { at: Date.now(), forks });
-  return forks;
+/** Forks eines Repos laut GitHub, für Autovervollständigung und Dashboard. */
+export function listForkCandidates(owner, repo, token) {
+  return cached(`forks:${owner}/${repo}`.toLowerCase(), async () =>
+    (await fetchForks(owner, repo, token)).map((fork) => ({
+      slug: fork.full_name,
+      owner: fork.owner?.login || "",
+      defaultBranch: fork.default_branch || "",
+      pushedAt: fork.pushed_at || null
+    })));
+}
+
+/** Haupt-Branch zuerst, danach alphabetisch. */
+export function sortBranches(names, defaultBranch) {
+  return [...names].sort((a, b) => {
+    if (a === defaultBranch) {
+      return -1;
+    }
+
+    if (b === defaultBranch) {
+      return 1;
+    }
+
+    return a.localeCompare(b, "de");
+  });
+}
+
+/**
+ * Branches eines Repos laut GitHub, Haupt-Branch zuerst. GitHub liefert pro
+ * Abruf höchstens 100 – für Auswahllisten reicht das.
+ */
+export function listBranches(owner, repo, token) {
+  return cached(`branches:${owner}/${repo}`.toLowerCase(), async () => {
+    const [info, branches] = await Promise.all([
+      fetchRepoInfo(owner, repo, token),
+      fetchBranches(owner, repo, token).catch(() => [])
+    ]);
+
+    if (!info) {
+      throw new RepoConfigError(`\`${owner}/${repo}\` wurde auf GitHub nicht gefunden.`);
+    }
+
+    const defaultBranch = info.default_branch || "";
+    return {
+      repo: info.full_name,
+      defaultBranch,
+      branches: sortBranches(branches.map((branch) => branch.name), defaultBranch)
+    };
+  });
+}
+
+/**
+ * Branches des Forks, den jemand gerade eingibt – ohne Fork-Angabe die des
+ * beobachteten Repos selbst.
+ */
+export async function listBranchesFor({ settingsStore, guildId, token, parentInput, forkInput }) {
+  const repos = getRepos(settingsStore, guildId);
+  const parent = repos[findWatchedRepo(repos, parentInput)];
+  const target = String(forkInput || "").trim() ? parseForkInput(forkInput, parent) : parent;
+
+  if (!target) {
+    throw new RepoConfigError("Bitte gib den Fork als `benutzer`, `benutzer/repo` oder GitHub-Link an.");
+  }
+
+  return listBranches(target.owner, target.repo, token);
 }

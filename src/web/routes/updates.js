@@ -1,15 +1,19 @@
 import { ACCESS_LEVELS, requireLevel } from "../auth.js";
 import { HttpError, sendJson } from "../http.js";
 import { recordAudit } from "../../core/audit.js";
+import { parseRepoSlug } from "../../modules/updates/services/github.js";
 import {
   RepoConfigError,
   addFork,
   addRepo,
   findRepoIndex,
   getRepos,
+  listBranches,
+  listBranchesFor,
   listForkCandidates,
   removeFork,
-  removeRepo
+  removeRepo,
+  setRepoBranch
 } from "../../modules/updates/services/repos.js";
 
 // Die gesehenen IDs sind interner Polling-Stand und gehen das Dashboard nichts an.
@@ -18,6 +22,7 @@ function publicRepos(repos) {
     owner: entry.owner,
     repo: entry.repo,
     label: entry.label,
+    branch: entry.branch,
     forks: entry.forks.map((fork) => ({ owner: fork.owner, repo: fork.repo, branch: fork.branch, label: fork.label }))
   }));
 }
@@ -58,11 +63,42 @@ export function registerUpdatesRoutes(router, { client }) {
       guildId: ctx.params.guildId,
       token: env.githubToken,
       input: ctx.body.repo,
-      label: ctx.body.label
+      label: ctx.body.label,
+      branch: ctx.body.branch
     }));
 
     audit(ctx, "updates.repo.add", { repo: `${entry.owner}/${entry.repo}` });
     sendJson(ctx.res, 200, publicRepos(getRepos(settingsStore, ctx.params.guildId)));
+  });
+
+  // Branch eines beobachteten Repos setzen; leer = zurück zum Standard.
+  router.patch("/api/guilds/:guildId/updates/repos/:owner/:repo", async (ctx) => {
+    requireLevel(ctx.access, ACCESS_LEVELS.admin);
+
+    const slug = `${ctx.params.owner}/${ctx.params.repo}`;
+    const entry = await run(() => setRepoBranch({
+      settingsStore,
+      guildId: ctx.params.guildId,
+      token: env.githubToken,
+      input: slug,
+      branch: ctx.body.branch
+    }));
+
+    audit(ctx, "updates.repo.branch", { repo: slug, branch: entry.branch });
+    sendJson(ctx.res, 200, publicRepos(getRepos(settingsStore, ctx.params.guildId)));
+  });
+
+  // Branches eines beliebigen Repos – für den Dialog "Repo beobachten", in dem
+  // das Repo noch nicht in der Liste steht.
+  router.get("/api/guilds/:guildId/updates/branches", async (ctx) => {
+    requireLevel(ctx.access, ACCESS_LEVELS.admin);
+
+    const slug = parseRepoSlug(ctx.url.searchParams.get("repo"));
+    if (!slug) {
+      throw new HttpError(400, "Repo bitte als owner/repo angeben");
+    }
+
+    sendJson(ctx.res, 200, await run(() => listBranches(slug.owner, slug.repo, env.githubToken)));
   });
 
   router.delete("/api/guilds/:guildId/updates/repos/:owner/:repo", async (ctx) => {
@@ -90,6 +126,21 @@ export function registerUpdatesRoutes(router, { client }) {
     const candidates = await listForkCandidates(repos[index].owner, repos[index].repo, env.githubToken)
       .catch(() => []);
     sendJson(ctx.res, 200, candidates);
+  });
+
+  // Branches des eingegebenen Forks (?fork=benutzer), ohne Angabe die des Repos.
+  router.get("/api/guilds/:guildId/updates/repos/:owner/:repo/branches", async (ctx) => {
+    requireLevel(ctx.access, ACCESS_LEVELS.admin);
+
+    const result = await run(() => listBranchesFor({
+      settingsStore,
+      guildId: ctx.params.guildId,
+      token: env.githubToken,
+      parentInput: `${ctx.params.owner}/${ctx.params.repo}`,
+      forkInput: ctx.url.searchParams.get("fork") || ""
+    }));
+
+    sendJson(ctx.res, 200, result);
   });
 
   router.post("/api/guilds/:guildId/updates/repos/:owner/:repo/forks", async (ctx) => {
