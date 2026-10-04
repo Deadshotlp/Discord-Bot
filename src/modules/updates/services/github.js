@@ -63,6 +63,11 @@ export function fetchBranch(owner, repo, branch, token) {
   return githubGet(`/repos/${owner}/${repo}/branches/${encodeRef(branch)}`, token, { allowNotFound: true });
 }
 
+export async function fetchBranches(owner, repo, token) {
+  const branches = await githubGet(`/repos/${owner}/${repo}/branches?per_page=100`, token);
+  return Array.isArray(branches) ? branches : [];
+}
+
 export async function fetchForks(owner, repo, token) {
   const forks = await githubGet(`/repos/${owner}/${repo}/forks?sort=newest&per_page=100`, token);
   return Array.isArray(forks) ? forks : [];
@@ -100,19 +105,29 @@ export function toCommitUpdate(commit) {
   };
 }
 
-export async function fetchLatestUpdate(owner, repo, token) {
+/** Neuestes Release oder null, wenn das Repo keine hat. Wirft bei API-Fehlern. */
+export async function fetchLatestReleaseUpdate(owner, repo, token) {
   const release = await fetchLatestRelease(owner, repo, token);
+  if (!release) {
+    return null;
+  }
+
+  return {
+    type: "release",
+    id: String(release.id),
+    title: release.name || release.tag_name,
+    version: release.tag_name || "",
+    url: release.html_url,
+    body: release.body || "",
+    author: release.author?.login || "",
+    publishedAt: release.published_at || release.created_at || null
+  };
+}
+
+export async function fetchLatestUpdate(owner, repo, token) {
+  const release = await fetchLatestReleaseUpdate(owner, repo, token);
   if (release) {
-    return {
-      type: "release",
-      id: String(release.id),
-      title: release.name || release.tag_name,
-      version: release.tag_name || "",
-      url: release.html_url,
-      body: release.body || "",
-      author: release.author?.login || "",
-      publishedAt: release.published_at || release.created_at || null
-    };
+    return release;
   }
 
   const commit = await fetchLatestCommit(owner, repo, token);

@@ -1,12 +1,13 @@
 import {
   fetchCompare,
   fetchLatestCommit,
+  fetchLatestReleaseUpdate,
   fetchLatestUpdate,
   fetchRepoInfo,
   repoSlugFromHtmlUrl
 } from "./github.js";
-import { buildForkUpdateEmbed, buildRepoUpdateEmbed } from "./embeds.js";
-import { forkKey, getRepos, normalizeRepos, repoKey, saveRepos, selectNewForkCommits } from "./repos.js";
+import { buildBranchUpdateEmbed, buildForkUpdateEmbed, buildRepoUpdateEmbed } from "./embeds.js";
+import { NO_RELEASE, forkKey, getRepos, normalizeRepos, repoKey, saveRepos, selectNewForkCommits } from "./repos.js";
 
 /**
  * Übernimmt einen neuen Namen, wenn GitHub das Repo inzwischen unter anderem
@@ -30,7 +31,73 @@ function followRename(entry, url, logger, guildId) {
   return true;
 }
 
-async function pollRepo({ channel, entry, env, logger, guildId }) {
+/** Neue Commits auf dem Branch seit dem letzten Stand, älteste zuerst. */
+async function collectBranchChanges(entry, latest, token) {
+  try {
+    const comparison = await fetchCompare(entry.owner, entry.repo, entry.lastSeenCommit, entry.branch, token);
+    return { commits: comparison.commits || [], compareUrl: comparison.html_url || "" };
+  } catch {
+    // Alter Stand nicht mehr auffindbar (z. B. nach Force-Push) – dann
+    // wenigstens den neuesten Commit melden.
+    return { commits: [latest], compareUrl: "" };
+  }
+}
+
+/**
+ * Repo mit gewähltem Branch: Releases werden weiter gemeldet, neue Commits auf
+ * dem Branch zusätzlich – gesammelt in einem Post je Durchlauf.
+ */
+async function pollRepoBranch({ channel, entry, env, logger, guildId }) {
+  const token = env.githubToken;
+  let changed = false;
+
+  const release = await fetchLatestReleaseUpdate(entry.owner, entry.repo, token);
+  if (release) {
+    changed = followRename(entry, release.url, logger, guildId) || changed;
+
+    if (release.id !== entry.lastSeenId) {
+      // Leer heißt "Stand unbekannt" – dann nur übernehmen. NO_RELEASE heißt,
+      // es gab bisher keins: dieses ist das erste und wird gepostet.
+      if (entry.lastSeenId) {
+        await channel.send({ embeds: [buildRepoUpdateEmbed(entry, release)] });
+      }
+
+      entry.lastSeenId = release.id;
+      changed = true;
+    }
+  } else if (!entry.lastSeenId) {
+    entry.lastSeenId = NO_RELEASE;
+    changed = true;
+  }
+
+  const latest = await fetchLatestCommit(entry.owner, entry.repo, token, entry.branch);
+  if (!latest) {
+    return changed;
+  }
+
+  changed = followRename(entry, latest.html_url, logger, guildId) || changed;
+
+  if (latest.sha === entry.lastSeenCommit) {
+    return changed;
+  }
+
+  if (entry.lastSeenCommit) {
+    const changes = await collectBranchChanges(entry, latest, token);
+
+    if (changes.commits.length > 0) {
+      await channel.send({ embeds: [buildBranchUpdateEmbed(entry, changes)] });
+    }
+  }
+
+  entry.lastSeenCommit = latest.sha;
+  return true;
+}
+
+export async function pollRepo({ channel, entry, env, logger, guildId }) {
+  if (entry.branch) {
+    return pollRepoBranch({ channel, entry, env, logger, guildId });
+  }
+
   const update = await fetchLatestUpdate(entry.owner, entry.repo, env.githubToken);
   if (!update) {
     return false;
@@ -57,11 +124,12 @@ async function pollRepo({ channel, entry, env, logger, guildId }) {
  */
 async function collectForkChanges(entry, fork, latest, token) {
   try {
-    const parentInfo = await fetchRepoInfo(entry.owner, entry.repo, token);
+    // Verglichen wird mit dem Branch, den das Original beobachtet.
+    const baseBranch = entry.branch || (await fetchRepoInfo(entry.owner, entry.repo, token)).default_branch;
     const comparison = await fetchCompare(
       entry.owner,
       entry.repo,
-      parentInfo.default_branch,
+      baseBranch,
       `${fork.owner}:${fork.branch}`,
       token
     );
@@ -117,7 +185,13 @@ function mergePollState(current, polled, originalKeys) {
     }
 
     const forksByOriginalKey = new Map(source.forks.map((fork) => [originalKeys.get(fork).toLowerCase(), fork]));
-    Object.assign(entry, { owner: source.owner, repo: source.repo, lastSeenId: source.lastSeenId });
+    Object.assign(entry, { owner: source.owner, repo: source.repo });
+
+    // Wurde der Branch währenddessen umgestellt, gehört der gepollte Stand zum
+    // alten Branch – dann gilt der beim Umstellen frisch gesetzte.
+    if (source.branch === entry.branch) {
+      Object.assign(entry, { lastSeenId: source.lastSeenId, lastSeenCommit: source.lastSeenCommit });
+    }
 
     for (const fork of entry.forks) {
       const polledFork = forksByOriginalKey.get(forkKey(fork).toLowerCase());

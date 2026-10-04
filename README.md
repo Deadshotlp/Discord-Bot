@@ -259,10 +259,16 @@ Befehle: `/meeting anmelden|abmelden|thema|status`
 
 - `/updates-repo add owner/repo` beobachtet GitHub-Releases; beim Hinzufügen wird
   der aktuelle Stand als Basislinie gespeichert.
+- Optional mit Branch (`/updates-repo add … branch:dev` oder nachträglich
+  `/updates-repo branch`): Releases werden weiter gepostet, neue Commits auf dem
+  Branch zusätzlich – mehrere in einem Post. Ohne Branch: neue Releases, bei Repos
+  ohne Releases Commits auf dem Haupt-Branch. Forks werden dann mit diesem Branch
+  des Originals verglichen.
 - `/updates-repo fork-add repo:owner/repo fork:benutzer [branch]` hinterlegt
   zusätzlich einen bestimmten Fork. Gepostet werden nur Commits, die es im
   Original nicht gibt – zieht ein Fork bloß den Stand des Originals nach, bleibt
-  es still. Ohne `branch` gilt der Haupt-Branch des Forks. Entfernen mit
+  es still. Ohne `branch` gilt der Haupt-Branch des Forks; beim Tippen schlägt
+  der Bot die Branches des gewählten Forks vor (Haupt-Branch zuerst). Entfernen mit
   `/updates-repo fork-remove`; alles auch im Dashboard unter *Einstellungen →
   GitHub-Updates*.
 - Wird ein beobachtetes Repo auf GitHub umbenannt, übernimmt der Bot den neuen
