@@ -35,9 +35,6 @@ WEB_HOST=0.0.0.0
 WEB_PORT=<Allocation-Port aus dem Panel>
 WEB_BASE_URL=https://bot.deadshot-development.de
 
-# Ohne das läuft der Bot in UTC – Termine und Tagesgrenzen wären verschoben.
-BOT_TIMEZONE=Europe/Berlin
-
 DISCORD_CLIENT_ID=<aus dem Developer Portal>
 DISCORD_CLIENT_SECRET=<aus dem Developer Portal>
 ```
@@ -57,6 +54,28 @@ https://bot.deadshot-development.de/api/auth/callback
 
 Danach den Server im Panel neu starten. In der Konsole muss stehen:
 `Web-Dashboard läuft`.
+
+### Zeitzone
+
+Container laufen ohne gesetztes `TZ` auf UTC. Terminlogik und Tagesstatistiken
+rechnen mit der Prozess-Zeitzone – ein auf 16:00 gestelltes Meeting würde in
+Discord sonst als 18:00 erscheinen (Sommerzeit, UTC+2).
+
+Der Bot setzt seine Zeitzone deshalb selbst und nutzt ohne Angabe
+`Europe/Berlin`. Abweichend einstellbar über:
+
+```dotenv
+BOT_TIMEZONE=Europe/Berlin
+```
+
+Pterodactyl gibt jedem Server `TZ=UTC` mit. Dieser Wert wird deshalb
+ignoriert; wer wirklich UTC will, setzt `BOT_TIMEZONE=UTC`. Andere
+`TZ`-Werte übernimmt der Bot, `BOT_TIMEZONE` hat Vorrang davor.
+
+Beim Start protokolliert der Bot die verwendete Zone, z. B.
+`Zeitzone gesetzt {"timezone":"Europe/Berlin","quelle":"Standard","versatz":"+02:00","containerTzIgnoriert":"UTC"}`.
+Alle Log-Zeilen tragen Ortszeit mit Versatz (`[2026-10-04 14:23:05 +02:00]`) –
+früher stand dort UTC, was wie eine um zwei Stunden nachgehende Uhr aussah.
 
 ---
 

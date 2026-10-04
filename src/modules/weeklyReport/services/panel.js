@@ -5,7 +5,7 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from "discord.js";
-import { formatPublishSchedule } from "./config.js";
+import { formatPublishSchedule, resolveReminderChannelId } from "./config.js";
 
 export const WEEKLY_REPORT_DEPT_SELECT_ID = "weekly_report_dept_select";
 export const WEEKLY_REPORT_SUBMIT_MODAL_PREFIX = "weekly_report_submit_modal:";
@@ -54,14 +54,23 @@ export function buildDepartmentSelect(departments) {
   };
 }
 
+function describeReminder(config) {
+  if (!(config.reminderHoursBefore > 0)) {
+    return "Erinnerung: aus";
+  }
+
+  const reminderChannelId = resolveReminderChannelId(config);
+  return reminderChannelId
+    ? `Erinnerung: ${config.reminderHoursBefore} h vorher in <#${reminderChannelId}>`
+    : `Erinnerung: ${config.reminderHoursBefore} h vorher (kein Channel gesetzt)`;
+}
+
 export function describeWeeklyReportConfig(config) {
   return [
     config.publishChannelId
       ? `Channel: <#${config.publishChannelId}>`
       : "Channel: (nicht gesetzt, Veröffentlichung pausiert)",
     `Termin: ${formatPublishSchedule(config)}`,
-    config.reminderHoursBefore > 0
-      ? `Erinnerung: ${config.reminderHoursBefore} h vorher`
-      : "Erinnerung: aus"
+    describeReminder(config)
   ].join("\n");
 }

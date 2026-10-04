@@ -1,3 +1,7 @@
+// Muss vor allem anderen laufen: setzt process.env.TZ, bevor irgendein Modul
+// mit lokalen Zeiten rechnet.
+import { formatOffset, timezoneInfo } from "./config/timezone.js";
+
 import {
   Client,
   GatewayIntentBits,
@@ -5,7 +9,6 @@ import {
 } from "discord.js";
 
 import { env } from "./config/env.js";
-import { describeTimezone } from "./config/timezone.js";
 import { closeDb } from "./core/db.js";
 import { SettingsStore } from "./core/settingsStore.js";
 import { Scheduler } from "./core/scheduler.js";
@@ -16,16 +19,20 @@ import { modules } from "./modules/index.js";
 
 const logger = createLogger(env.logLevel);
 
-if (!env.timezoneValid) {
-  logger.warn("Unbekannte Zeitzone in BOT_TIMEZONE – es gilt die Vorgabe", {
-    angefordert: env.timezoneRequested,
-    verwendet: env.timezone
-  });
+if (timezoneInfo.warning) {
+  logger.warn(timezoneInfo.warning);
 }
 
 // Ohne diese Zeile ist im Nachhinein kaum zu erkennen, ob falsche Uhrzeiten an
 // der Zeitzone lagen.
-logger.info("Zeitzone", describeTimezone(env.timezone));
+logger.info("Zeitzone gesetzt", {
+  timezone: timezoneInfo.timezone,
+  quelle: timezoneInfo.source,
+  versatz: formatOffset(),
+  ...(timezoneInfo.containerTz && timezoneInfo.containerTz !== timezoneInfo.timezone
+    ? { containerTzIgnoriert: timezoneInfo.containerTz }
+    : {})
+});
 
 const settingsStore = new SettingsStore(modules, logger);
 const scheduler = new Scheduler(logger);

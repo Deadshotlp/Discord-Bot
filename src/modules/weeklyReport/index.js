@@ -221,6 +221,7 @@ export const weeklyReportModule = {
   defaultEnabled: false,
   defaultConfig: {
     publishChannelId: "",
+    reminderChannelId: "",
     publishWeekday: 7,
     publishHour: 18,
     publishMinute: 0,

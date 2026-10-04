@@ -1,7 +1,15 @@
 import { ACCESS_LEVELS, requireLevel } from "../auth.js";
 import { HttpError, sendJson } from "../http.js";
+import { recordAudit } from "../../core/audit.js";
 import { buildTeamStats } from "../../core/staffEvents.js";
-import { normalizeDepartments } from "../../modules/support/services/config.js";
+import { getDepartmentById, normalizeDepartments } from "../../modules/support/services/config.js";
+import { getSupportConfig } from "../../modules/support/services/channelResolvers.js";
+import {
+  closeTicket,
+  escalateTicket,
+  listTicketMessages,
+  sendTicketReply
+} from "../../modules/support/services/ticketActions.js";
 import {
   getSupportTicket,
   getSupportTicketStats,
@@ -77,7 +85,8 @@ export function registerSupportRoutes(router, { client }) {
     });
   });
 
-  router.get("/api/guilds/:guildId/tickets/:ticketId", (ctx) => {
+  // Lädt ein Ticket und prüft dabei, ob der Anfragende dessen Department sehen darf.
+  function loadAccessibleTicket(ctx, { requireOpen = false } = {}) {
     requireLevel(ctx.access, ACCESS_LEVELS.staff);
 
     const ticket = getSupportTicket(ctx.params.guildId, ctx.params.ticketId);
@@ -90,7 +99,125 @@ export function registerSupportRoutes(router, { client }) {
       throw new HttpError(403, "Kein Zugriff auf dieses Department");
     }
 
-    sendJson(ctx.res, 200, ticket);
+    if (requireOpen && ticket.status !== "open") {
+      throw new HttpError(409, "Dieses Ticket ist bereits geschlossen");
+    }
+
+    return ticket;
+  }
+
+  router.get("/api/guilds/:guildId/tickets/:ticketId", (ctx) => {
+    sendJson(ctx.res, 200, loadAccessibleTicket(ctx));
+  });
+
+  router.get("/api/guilds/:guildId/tickets/:ticketId/messages", async (ctx) => {
+    const ticket = loadAccessibleTicket(ctx);
+    const history = await listTicketMessages({
+      guild: ctx.access.guild,
+      ticket,
+      limit: Number(ctx.url.searchParams.get("limit") || 100)
+    });
+
+    sendJson(ctx.res, 200, { ticket, ...history });
+  });
+
+  router.post("/api/guilds/:guildId/tickets/:ticketId/messages", async (ctx) => {
+    const ticket = loadAccessibleTicket(ctx, { requireOpen: true });
+    const content = String(ctx.body.content || "").trim();
+
+    if (!content) {
+      throw new HttpError(400, "Nachricht ist leer");
+    }
+
+    const member = ctx.access.member;
+    const message = await sendTicketReply({
+      guild: ctx.access.guild,
+      ticket,
+      author: {
+        name: member?.displayName || ctx.session.displayName || ctx.session.username,
+        avatarUrl: member?.displayAvatarURL({ size: 64 }) || ""
+      },
+      content
+    });
+
+    if (!message) {
+      throw new HttpError(502, "Der Ticket-Channel ist nicht erreichbar");
+    }
+
+    recordAudit({
+      guildId: ctx.params.guildId,
+      actorId: ctx.session.discordId,
+      actorName: ctx.session.username,
+      action: "ticket.reply",
+      detail: { ticketId: ticket.id, length: content.length }
+    });
+
+    sendJson(ctx.res, 201, { ok: true, messageId: message.id });
+  });
+
+  router.post("/api/guilds/:guildId/tickets/:ticketId/close", async (ctx) => {
+    const ticket = loadAccessibleTicket(ctx, { requireOpen: true });
+    const config = getSupportConfig(client.botContext.settingsStore, ctx.params.guildId, client.botContext.env);
+
+    const result = await closeTicket({
+      client,
+      guild: ctx.access.guild,
+      ticket,
+      config,
+      actorId: ctx.session.discordId
+    });
+
+    if (!result) {
+      throw new HttpError(409, "Dieses Ticket ist nicht mehr offen");
+    }
+
+    recordAudit({
+      guildId: ctx.params.guildId,
+      actorId: ctx.session.discordId,
+      actorName: ctx.session.username,
+      action: "ticket.close",
+      detail: { ticketId: ticket.id, transcript: result.transcriptCreated }
+    });
+
+    sendJson(ctx.res, 200, result.ticket);
+  });
+
+  router.post("/api/guilds/:guildId/tickets/:ticketId/escalate", async (ctx) => {
+    const ticket = loadAccessibleTicket(ctx, { requireOpen: true });
+    const config = getSupportConfig(client.botContext.settingsStore, ctx.params.guildId, client.botContext.env);
+    const departments = normalizeDepartments(config.departments);
+
+    const targetDepartment = getDepartmentById(departments, ctx.body.departmentId);
+    if (!targetDepartment) {
+      throw new HttpError(404, "Department nicht gefunden");
+    }
+
+    if (targetDepartment.id === ticket.departmentId) {
+      throw new HttpError(400, "Das Ticket liegt bereits in diesem Department");
+    }
+
+    const escalated = await escalateTicket({
+      guild: ctx.access.guild,
+      ticket,
+      config,
+      actorId: ctx.session.discordId,
+      currentDepartment: getDepartmentById(departments, ticket.departmentId),
+      targetDepartment
+    });
+
+    if (!escalated) {
+      throw new HttpError(409, "Ticket konnte nicht eskaliert werden");
+    }
+
+    recordAudit({
+      guildId: ctx.params.guildId,
+      actorId: ctx.session.discordId,
+      actorName: ctx.session.username,
+      action: "ticket.escalate",
+      detail: { ticketId: ticket.id, departmentId: targetDepartment.id }
+    });
+
+    sendJson(ctx.res, 200, escalated);
   });
 
   router.get("/api/guilds/:guildId/cases", async (ctx) => {

@@ -63,31 +63,25 @@ Zustand liegt in `data/`:
 - `bot.db` – Modul-Einstellungen, Monitoring, Abmeldungen, Steam-Links, Sessions, Audit
 - `support-tickets.db`, `support-cases.db`, `meetings.db`, `weekly-reports.db` – Fachdaten
 
+Über `DATA_DIR` lässt sich ein anderes Verzeichnis setzen, z. B. ein
+persistentes Volume. Eine vorhandene `data/module-config.json` aus der
+Vorgängerversion wird beim ersten Start automatisch übernommen.
+
 ## Zeitzone
 
 Der Bot rechnet durchgehend mit lokaler Zeit: Tagesgrenzen von Abmeldungen,
 Meeting-Termine, Veröffentlichung der Wochenberichte, Tagesprofile im
-Monitoring. Im Container ist die Systemzeit üblicherweise UTC – ohne Angabe
-wäre also alles ein bis zwei Stunden verschoben.
+Monitoring, Zeitstempel in Logs und Transkripten. Vorgabe ist
+`Europe/Berlin`; abweichend über einen IANA-Namen einstellbar:
 
 ```dotenv
 BOT_TIMEZONE=Europe/Berlin
 ```
 
-Das ist die Vorgabe; ein anderer Wert muss ein gültiger IANA-Name sein
-(`Europe/Vienna`, `America/New_York` …). Ein fester Versatz wie `+01:00` wird
-absichtlich nicht unterstützt: `Europe/Berlin` deckt MEZ (+1) und MESZ (+2)
-samt Umstellungsterminen ab, ein fester Wert wäre im Sommer eine Stunde daneben.
-
-Beim Start schreibt der Bot die geltende Zeitzone ins Log:
-
-```text
-Zeitzone {"timezone":"Europe/Berlin","offset":"+02:00","localTime":"30.08.26, 20:15"}
-```
-
-Über `DATA_DIR` lässt sich ein anderes Verzeichnis setzen, z. B. ein
-persistentes Volume. Eine vorhandene `data/module-config.json` aus der
-Vorgängerversion wird beim ersten Start automatisch übernommen.
+Ein vom Container gesetztes `TZ=UTC` (Pterodactyl) wird ignoriert. Ein fester
+Versatz wie `+01:00` wird absichtlich nicht unterstützt: `Europe/Berlin`
+deckt MEZ (+1) und MESZ (+2) samt Umstellungsterminen ab. Details siehe
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Web-Dashboard
 
@@ -103,6 +97,11 @@ echten Rollen auf dem Server:
 
 Seiten: Übersicht, Server-Monitoring, Tickets, Teamliste, Team-Statistiken,
 Abmeldungen, Meetings, Steam & Spielzeit, Einstellungen, Protokoll.
+
+Auf der Ticket-Seite lässt sich jedes Ticket öffnen: Der Nachrichtenverlauf des
+Discord-Channels wird angezeigt und alle 15 Sekunden nachgeladen. Antworten
+gehen als Bot-Embed mit dem Namen des Teammitglieds in den Ticket-Channel;
+Schließen und Department-Wechsel verhalten sich wie die Buttons in Discord.
 
 Das Frontend besteht aus reinen ES-Modulen ohne Build-Schritt – es gibt nichts zu
 kompilieren, `npm install` genügt. Hinter einem Reverse Proxy sollte
@@ -251,7 +250,9 @@ Befehle: `/meeting anmelden|abmelden|thema|status`
 - Abgabe mit `/wochenbericht abgeben` (Modal, Markdown, bis 3900 Zeichen).
 - Veröffentlichung zum konfigurierten Termin: Kopfzeile mit Kalenderwoche plus
   ein Embed je Department; fehlende Abgaben werden markiert.
-- Optionale Erinnerung an die Leitungs-Rollen der Departments ohne Abgabe.
+- Optionale Erinnerung an die Leitungs-Rollen der Departments ohne Abgabe. Der
+  Erinnerungs-Channel lässt sich getrennt vom Veröffentlichungs-Channel setzen;
+  bleibt er leer, wird der Veröffentlichungs-Channel genutzt.
 - Verpasste Termine (Bot offline) werden beim nächsten Start nachgeholt.
 
 ## Updates & Content-Creator

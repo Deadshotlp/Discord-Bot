@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildReminderMessage, buildWeeklyReportMessages } from "../src/modules/weeklyReport/services/publisher.js";
+import { normalizeWeeklyReportConfig, resolveReminderChannelId } from "../src/modules/weeklyReport/services/config.js";
 
 function makeDepartments(count) {
   return Array.from({ length: count }, (_, index) => ({
@@ -57,6 +58,22 @@ test("buildWeeklyReportMessages splits when the embed character budget is exceed
 
   const messages = buildWeeklyReportMessages("2026-W27", departments, reports);
   assert.equal(messages.length, 2);
+});
+
+test("resolveReminderChannelId prefers the dedicated reminder channel", () => {
+  const config = normalizeWeeklyReportConfig({
+    publishChannelId: "111111111111111111",
+    reminderChannelId: "222222222222222222"
+  });
+
+  assert.equal(resolveReminderChannelId(config), "222222222222222222");
+});
+
+test("resolveReminderChannelId falls back to the publish channel", () => {
+  const config = normalizeWeeklyReportConfig({ publishChannelId: "111111111111111111" });
+
+  assert.equal(config.reminderChannelId, "");
+  assert.equal(resolveReminderChannelId(config), "111111111111111111");
 });
 
 test("buildReminderMessage pings lead roles of missing departments only", () => {

@@ -186,7 +186,23 @@ export async function createTicketChannel({ guild, user, department, config, log
   };
 }
 
-export async function findFreeTalkChannel(guild, config, logger) {
+function buildExtraTalkChannelName(guild, prefix, startIndex) {
+  const takenNames = new Set(
+    [...guild.channels.cache.values()].map((channel) => channel.name.toLowerCase())
+  );
+
+  for (let index = startIndex; index <= startIndex + 100; index += 1) {
+    const candidate = `${prefix}-${index}`;
+    if (!takenNames.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+
+  return `${prefix}-${Date.now().toString(36)}`;
+}
+
+export async function findFreeTalkChannel(client, guild, config) {
+  const { settingsStore, env, logger } = client.botContext;
   const talkIds = Array.isArray(config.talkChannelIds) ? config.talkChannelIds : [];
 
   for (const channelId of talkIds) {
@@ -203,14 +219,23 @@ export async function findFreeTalkChannel(guild, config, logger) {
 
   const talkCategoryId = config.talkCategoryId || null;
   const parent = talkCategoryId ? guild.channels.cache.get(talkCategoryId) : null;
+  const prefix = String(env.supportTalkChannelPrefix || "support-talk").trim() || "support-talk";
 
   try {
-    return await guild.channels.create({
-      name: `support-talk-${talkIds.length + 1}`,
+    const channel = await guild.channels.create({
+      name: buildExtraTalkChannelName(guild, prefix, talkIds.length + 1),
       type: ChannelType.GuildVoice,
       parent: parent?.id || null,
       reason: "Zusätzlicher freier Support-Talk wurde benötigt"
     });
+
+    // Ohne diesen Schritt kennt die Provisionierung den Kanal beim nächsten
+    // Start nicht und legt daneben einen weiteren an.
+    settingsStore.setModuleConfig(guild.id, "support", {
+      talkChannelIds: [...talkIds, channel.id]
+    });
+
+    return channel;
   } catch (error) {
     logger.warn("Zusätzlicher Support-Talk konnte nicht erstellt werden", {
       guildId: guild.id,

@@ -1,70 +1,103 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-import { DEFAULT_TIMEZONE, applyTimezone, describeTimezone } from "../src/config/timezone.js";
+import { DEFAULT_TIMEZONE, applyTimezone, formatLocalTimestamp } from "../src/config/timezone.js";
 
-const ORIGINAL = process.env.TZ;
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-test.after(() => {
-  if (ORIGINAL === undefined) {
-    delete process.env.TZ;
-  } else {
-    process.env.TZ = ORIGINAL;
+// Die Zeitzone wirkt prozessweit, deshalb laeuft die Terminberechnung in einem
+// eigenen Node-Prozess mit der Umgebung eines Containers (TZ nicht gesetzt).
+function runInChildProcess(env) {
+  const script = `
+    import { timezoneInfo } from "./src/config/timezone.js";
+    const { getNextOccurrence } = await import("./src/modules/meeting/services/schedule.js");
+
+    const config = { anchorDate: "2026-08-01", intervalWeeks: 2, weekday: 6, hour: 16, minute: 0 };
+    const next = getNextOccurrence(new Date("2026-07-30T18:00:00Z"), config);
+
+    console.log(JSON.stringify({
+      timezone: timezoneInfo.timezone,
+      source: timezoneInfo.source,
+      warning: timezoneInfo.warning,
+      resolved: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      berlin: new Intl.DateTimeFormat("de-DE", {
+        timeZone: "Europe/Berlin", dateStyle: "short", timeStyle: "short"
+      }).format(next)
+    }));
+  `;
+
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: { ...process.env, TZ: undefined, BOT_TIMEZONE: undefined, ...env }
+  });
+
+  return JSON.parse(output.trim().split("\n").at(-1));
+}
+
+test("Ohne TZ faellt der Bot auf Europe/Berlin zurueck statt auf UTC", () => {
+  const result = runInChildProcess({});
+
+  assert.equal(result.timezone, DEFAULT_TIMEZONE);
+  assert.equal(result.source, "Standard");
+  assert.equal(result.resolved, DEFAULT_TIMEZONE);
+});
+
+test("Ein auf 16:00 gestelltes Meeting erscheint auch im UTC-Container als 16:00", () => {
+  const result = runInChildProcess({});
+
+  assert.match(result.berlin, /16:00/);
+  assert.match(result.berlin, /01\.08\.26/);
+});
+
+test("BOT_TIMEZONE hat Vorrang vor einem gesetzten TZ", () => {
+  const result = runInChildProcess({ TZ: "UTC", BOT_TIMEZONE: "Europe/Berlin" });
+
+  assert.equal(result.timezone, "Europe/Berlin");
+  assert.equal(result.source, "BOT_TIMEZONE");
+  assert.match(result.berlin, /16:00/);
+});
+
+test("Ein gesetztes TZ wird uebernommen, wenn BOT_TIMEZONE fehlt", () => {
+  const result = runInChildProcess({ TZ: "America/New_York" });
+
+  assert.equal(result.timezone, "America/New_York");
+  assert.equal(result.source, "TZ");
+});
+
+test("Ein vom Container vorgegebenes TZ=UTC wird ignoriert", () => {
+  // Pterodactyl setzt TZ=UTC fuer jeden Server – das war der Grund, warum der
+  // Bot trotz Zeitzonen-Fix zwei Stunden nachging.
+  for (const containerTz of ["UTC", "Etc/UTC", "GMT"]) {
+    const result = runInChildProcess({ TZ: containerTz });
+
+    assert.equal(result.timezone, DEFAULT_TIMEZONE, containerTz);
+    assert.equal(result.source, "Standard", containerTz);
+    assert.match(result.berlin, /16:00/, containerTz);
   }
 });
 
-test("ohne Angabe gilt Europe/Berlin", () => {
-  const result = applyTimezone(undefined);
+test("UTC bleibt moeglich, wenn es ausdruecklich gewuenscht ist", () => {
+  const result = runInChildProcess({ TZ: "UTC", BOT_TIMEZONE: "UTC" });
+
+  assert.equal(result.timezone, "UTC");
+  assert.equal(result.source, "BOT_TIMEZONE");
+});
+
+test("Zeitstempel fuer Logs zeigen Ortszeit mit Versatz statt UTC", () => {
+  applyTimezone("Europe/Berlin", "");
+
+  assert.equal(formatLocalTimestamp(new Date("2026-07-15T12:30:05Z")), "2026-07-15 14:30:05 +02:00");
+  assert.equal(formatLocalTimestamp(new Date("2026-01-15T12:30:05Z")), "2026-01-15 13:30:05 +01:00");
+  assert.equal(formatLocalTimestamp("kein Datum"), "-");
+});
+
+test("Eine unbekannte Zeitzone faellt mit Warnung auf den Standard zurueck", () => {
+  const result = applyTimezone("Nicht/Existent", "");
 
   assert.equal(result.timezone, DEFAULT_TIMEZONE);
-  assert.equal(result.valid, true);
-  assert.equal(process.env.TZ, DEFAULT_TIMEZONE);
-});
-
-test("leere Angaben zählen wie keine Angabe", () => {
-  assert.equal(applyTimezone("").timezone, DEFAULT_TIMEZONE);
-  assert.equal(applyTimezone("   ").timezone, DEFAULT_TIMEZONE);
-});
-
-test("eine gültige Zeitzone wird übernommen", () => {
-  const result = applyTimezone("America/New_York");
-
-  assert.equal(result.timezone, "America/New_York");
-  assert.equal(result.valid, true);
-  assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, "America/New_York");
-});
-
-test("eine unbekannte Zeitzone fällt auf die Vorgabe zurück und meldet das", () => {
-  const result = applyTimezone("Mittelerde/Auenland");
-
-  assert.equal(result.valid, false);
-  assert.equal(result.requested, "Mittelerde/Auenland");
-  assert.equal(result.timezone, DEFAULT_TIMEZONE);
-  assert.equal(process.env.TZ, DEFAULT_TIMEZONE);
-});
-
-test("Winter- und Sommerzeit werden unterschieden", () => {
-  applyTimezone("Europe/Berlin");
-
-  // 20:30 UTC entspricht 21:30 MEZ im Januar und 22:30 MESZ im Juli.
-  assert.equal(new Date("2026-01-15T20:30:00Z").getHours(), 21, "MEZ (+1)");
-  assert.equal(new Date("2026-07-15T20:30:00Z").getHours(), 22, "MESZ (+2)");
-});
-
-test("Tagesgrenzen verschieben sich mit der Zeitzone", () => {
-  // 23:30 UTC am 5. Mai ist in Deutschland bereits der 6. Mai.
-  applyTimezone("UTC");
-  assert.equal(new Date("2026-05-05T23:30:00Z").getDate(), 5);
-
-  applyTimezone("Europe/Berlin");
-  assert.equal(new Date("2026-05-05T23:30:00Z").getDate(), 6);
-});
-
-test("die Beschreibung nennt Zone, Versatz und Ortszeit", () => {
-  applyTimezone("Europe/Berlin");
-  const beschreibung = describeTimezone();
-
-  assert.equal(beschreibung.timezone, "Europe/Berlin");
-  assert.match(beschreibung.offset, /^\+0[12]:00$/);
-  assert.match(beschreibung.localTime, /\d{2}\.\d{2}\.\d{2},? \d{2}:\d{2}/);
+  assert.match(result.warning, /Nicht\/Existent/);
 });

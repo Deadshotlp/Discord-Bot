@@ -1,5 +1,6 @@
 import { EmbedBuilder } from "discord.js";
 import { resolveTextAnnouncementChannel } from "../../../core/discordUtil.js";
+import { resolveReminderChannelId } from "./config.js";
 import { listWeeklyReportsForWeek, markWeekPublished } from "./reports.js";
 import { formatWeekDateRange, formatWeekLabel } from "./week.js";
 
@@ -142,8 +143,14 @@ export function buildReminderMessage(weekKey, missingDepartments, publishMoment)
 export async function sendWeeklyReminder(client, guild, weekKey, departments, config, publishMoment) {
   const { settingsStore, logger } = client.botContext;
 
-  const channel = await resolveTextAnnouncementChannel(guild, config.publishChannelId);
+  const reminderChannelId = resolveReminderChannelId(config);
+  const channel = await resolveTextAnnouncementChannel(guild, reminderChannelId);
   if (!channel) {
+    logger.warn("Wochenbericht: Erinnerungs-Channel nicht verfügbar", {
+      guildId: guild.id,
+      channelId: reminderChannelId,
+      week: weekKey
+    });
     return false;
   }
 
@@ -165,6 +172,7 @@ export async function sendWeeklyReminder(client, guild, weekKey, departments, co
   logger.info("Wochenbericht-Erinnerung gesendet", {
     guildId: guild.id,
     week: weekKey,
+    channelId: channel.id,
     missing: missingDepartments.length
   });
 

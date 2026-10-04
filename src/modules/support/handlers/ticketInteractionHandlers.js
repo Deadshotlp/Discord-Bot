@@ -1,18 +1,15 @@
-import { AttachmentBuilder, ChannelType, MessageFlags } from "discord.js";
-import { formatLocalTimestamp } from "../../../config/timezone.js";
+import { ChannelType, MessageFlags } from "discord.js";
 import { getDepartmentById, normalizeDepartments } from "../services/config.js";
 import {
   getSupportConfig,
-  resolveExistingRoleIds,
-  resolveTextChannel,
-  resolveTranscriptChannel
+  resolveTextChannel
 } from "../services/channelResolvers.js";
 import { createTicketChannel } from "../services/ticketChannelFactory.js";
+import { closeTicket, escalateTicket } from "../services/ticketActions.js";
 import { scheduleClosedTicketChannelDeletion } from "../services/closedTicketCleanup.js";
 import {
   closeSupportTicket,
   createSupportTicket,
-  escalateSupportTicket,
   getOpenTicketByUser,
   getSupportTicket
 } from "../services/tickets.js";
@@ -26,103 +23,6 @@ import {
   SUPPORT_TICKET_OPEN_MODAL_PREFIX,
   buildSupportTicketOpenModal
 } from "../services/ticketPanel.js";
-
-async function buildTicketTranscriptContent(ticketChannel, ticket, departmentName) {
-  const collected = [];
-  let before;
-
-  for (let index = 0; index < 10; index += 1) {
-    const fetched = await ticketChannel.messages.fetch({
-      limit: 100,
-      before
-    }).catch(() => null);
-
-    if (!fetched || fetched.size === 0) {
-      break;
-    }
-
-    collected.push(...fetched.values());
-
-    const lastMessage = fetched.last();
-    if (!lastMessage) {
-      break;
-    }
-
-    before = lastMessage.id;
-  }
-
-  const ordered = collected.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-  const lines = [
-    `Ticket: ${ticket.id}`,
-    `Status: ${ticket.status}`,
-    `Nutzer: ${ticket.userId}`,
-    `Department: ${departmentName || ticket.departmentId}`,
-    `Channel: ${ticket.channelId}`,
-    `Titel: ${ticket.ticketName || "-"}`,
-    `Erstellt: ${ticket.createdAt ? formatLocalTimestamp(ticket.createdAt) : "-"}`,
-    `Geschlossen: ${ticket.closedAt ? formatLocalTimestamp(ticket.closedAt) : "-"}`,
-    `Geschlossen von: ${ticket.closedById || "-"}`,
-    "",
-    "Beschreibung:",
-    ticket.ticketDescription || "-",
-    "",
-    "Nachrichtenverlauf:"
-  ];
-
-  for (const message of ordered) {
-    const author = message.author?.tag || message.author?.username || message.author?.id || "Unbekannt";
-    const timestamp = formatLocalTimestamp(message.createdAt || new Date());
-    const content = (message.content || "").trim();
-    const text = content || "(kein Text)";
-
-    lines.push(`[${timestamp}] ${author}: ${text}`);
-
-    if (message.attachments.size > 0) {
-      const files = Array.from(message.attachments.values())
-        .map((file) => file.url)
-        .join(" | ");
-      lines.push(`  Anhänge: ${files}`);
-    }
-
-    if (message.embeds.length > 0) {
-      lines.push(`  Embeds: ${message.embeds.length}`);
-    }
-  }
-
-  return `${lines.join("\n")}\n`;
-}
-
-async function postTicketTranscript({ interaction, ticket, config, departmentName }) {
-  const ticketChannel = interaction.channel && interaction.channel.type === ChannelType.GuildText
-    ? interaction.channel
-    : (await resolveTextChannel(interaction.guild, ticket.channelId));
-
-  if (!ticketChannel) {
-    return false;
-  }
-
-  const transcriptChannel = await resolveTranscriptChannel(interaction.guild, config);
-
-  if (!transcriptChannel) {
-    return false;
-  }
-
-  const transcriptContent = await buildTicketTranscriptContent(ticketChannel, ticket, departmentName);
-  const attachment = new AttachmentBuilder(Buffer.from(transcriptContent, "utf8"), {
-    name: `support-ticket-${ticket.id}.txt`
-  });
-
-  const sentMessage = await transcriptChannel.send({
-    content: `Transkript für Ticket ${ticket.id} (geschlossen von <@${ticket.closedById || "system"}>)`,
-    files: [attachment],
-    allowedMentions: {
-      parse: []
-    }
-  }).catch(() => null);
-
-  return Boolean(sentMessage);
-}
 
 export async function handleTicketOpenButtonInteraction({ client, interaction }) {
   const supportState = client.botContext.settingsStore.getModuleState(interaction.guildId, "support");
@@ -392,63 +292,22 @@ export async function handleTicketEscalationSelectInteraction({ client, interact
     return;
   }
 
-  const escalatedTicket = escalateSupportTicket(
-    interaction.guildId,
-    ticket.id,
-    selectedDepartmentId,
-    interaction.user.id
-  );
-  if (!escalatedTicket || escalatedTicket.status !== "open") {
+  const escalatedTicket = await escalateTicket({
+    guild: interaction.guild,
+    ticket,
+    config,
+    actorId: interaction.user.id,
+    currentDepartment,
+    targetDepartment: selectedDepartment,
+    ticketChannel: interaction.channel?.type === ChannelType.GuildText ? interaction.channel : null
+  });
+
+  if (!escalatedTicket) {
     await interaction.reply({
       content: "Ticket konnte nicht eskaliert werden.",
       flags: MessageFlags.Ephemeral
     });
     return;
-  }
-
-  const ticketChannel = interaction.channel && interaction.channel.type === ChannelType.GuildText
-    ? interaction.channel
-    : (await resolveTextChannel(interaction.guild, ticket.channelId));
-
-  if (ticketChannel) {
-    const currentRoleIds = await resolveExistingRoleIds(interaction.guild, currentDepartment?.roleIds || []);
-    const nextRoleIds = await resolveExistingRoleIds(interaction.guild, selectedDepartment.roleIds || []);
-
-    for (const roleId of currentRoleIds) {
-      if (!nextRoleIds.includes(roleId)) {
-        await ticketChannel.permissionOverwrites.delete(roleId).catch(() => null);
-      }
-    }
-
-    for (const roleId of nextRoleIds) {
-      await ticketChannel.permissionOverwrites.edit(roleId, {
-        ViewChannel: true,
-        SendMessages: true,
-        ReadMessageHistory: true
-      }).catch(() => null);
-    }
-
-    const pingMentions = nextRoleIds.length > 0
-      ? nextRoleIds.map((roleId) => `<@&${roleId}>`).join(" ")
-      : "@here";
-
-    await ticketChannel.send({
-      content: `${pingMentions}\nTicket ${ticket.id} wurde von <@${interaction.user.id}> auf ${selectedDepartment.name} eskaliert.`,
-      allowedMentions: {
-        parse: nextRoleIds.length > 0 ? [] : ["everyone"],
-        roles: nextRoleIds
-      }
-    }).catch(() => null);
-  }
-
-  const managementChannel = await resolveTextChannel(interaction.guild, config.managementChannelId);
-  if (managementChannel) {
-    await managementChannel.send({
-      content: `Ticket ${ticket.id} wurde von <@${interaction.user.id}> auf ${selectedDepartment.name} eskaliert: <#${ticket.channelId}>`,
-      allowedMentions: {
-        parse: []
-      }
-    }).catch(() => null);
   }
 
   await interaction.update({
@@ -478,55 +337,26 @@ export async function handleTicketCloseInteraction({ client, interaction, ticket
     return;
   }
 
-  const closedTicket = closeSupportTicket(interaction.guildId, ticket.id, interaction.user.id);
-  if (!closedTicket) {
-    await interaction.reply({
-      content: "Dieses Ticket ist nicht mehr offen.",
-      flags: MessageFlags.Ephemeral
-    });
-    return;
-  }
-
+  // Die Antwort muss vor den langlaufenden Kanal-Operationen raus,
+  // sonst läuft das 3-Sekunden-Fenster der Interaction ab.
   await interaction.update({
     content: `Ticket wurde geschlossen von <@${interaction.user.id}>.`,
     components: []
   });
 
-  const ticketChannel = interaction.channel && interaction.channel.type === ChannelType.GuildText
-    ? interaction.channel
-    : (await resolveTextChannel(interaction.guild, ticket.channelId));
-
-  if (ticketChannel) {
-    await ticketChannel.permissionOverwrites.edit(ticket.userId, {
-      ViewChannel: false,
-      SendMessages: false
-    }).catch(() => null);
-
-    const nextName = ticketChannel.name.startsWith("geschlossen-")
-      ? ticketChannel.name
-      : `geschlossen-${ticketChannel.name}`.slice(0, 100);
-
-    await ticketChannel.setName(nextName).catch(() => null);
-    await ticketChannel.send({
-      content: `Ticket geschlossen von <@${interaction.user.id}>. Dieser Kanal wird in 24 Stunden automatisch geloescht.`
-    }).catch(() => null);
-  }
-
-  scheduleClosedTicketChannelDeletion({ client, ticket: closedTicket });
-
-  const transcriptCreated = await postTicketTranscript({
-    interaction,
-    ticket: closedTicket,
+  const result = await closeTicket({
+    client,
+    guild: interaction.guild,
+    ticket,
     config,
-    departmentName: department?.name || ""
+    actorId: interaction.user.id,
+    ticketChannel: interaction.channel?.type === ChannelType.GuildText ? interaction.channel : null
   });
 
-  const managementChannel = await resolveTextChannel(interaction.guild, config.managementChannelId);
-  if (managementChannel) {
-    await managementChannel.send({
-      content: transcriptCreated
-        ? `Ticket ${ticket.id} wurde geschlossen von <@${interaction.user.id}>. Transkript wurde erstellt.`
-        : `Ticket ${ticket.id} wurde geschlossen von <@${interaction.user.id}>. Transkript konnte nicht erstellt werden.`
+  if (!result) {
+    await interaction.followUp({
+      content: "Dieses Ticket ist nicht mehr offen.",
+      flags: MessageFlags.Ephemeral
     }).catch(() => null);
   }
 }

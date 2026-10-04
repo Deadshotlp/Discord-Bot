@@ -180,6 +180,24 @@ export function updateServer(serverId, input) {
   return getServer(existing.id);
 }
 
+const updateMetaStmt = db.prepare("UPDATE monitor_servers SET meta_json = ? WHERE id = ?");
+
+/**
+ * Schreibt nur das Meta-Feld, ohne die restlichen Spalten anzufassen.
+ * Wird vom Poller für flüchtigen Zustand genutzt (z. B. die ID der zuletzt
+ * gesendeten Status-Benachrichtigung).
+ */
+export function patchServerMeta(serverId, patch) {
+  const existing = getServer(serverId);
+  if (!existing) {
+    return null;
+  }
+
+  const meta = { ...existing.meta, ...patch };
+  updateMetaStmt.run(JSON.stringify(meta), existing.id);
+  return meta;
+}
+
 export function deleteServer(serverId) {
   const existing = getServer(serverId);
   if (!existing) {

@@ -4,7 +4,7 @@ import { pruneHistory, recordSample } from "./history.js";
 import { closeOpenSessions, syncPlayerSessions } from "./playtime.js";
 import { buildPanelPayload, upsertPanelMessage } from "./panel.js";
 import { queryServer } from "./protocols/index.js";
-import { listAllEnabledServers, listServers } from "./servers.js";
+import { listAllEnabledServers, listServers, patchServerMeta } from "./servers.js";
 import { normalizeMonitoringConfig } from "./config.js";
 
 const JOB_PREFIX = "monitoring";
@@ -19,6 +19,26 @@ function serverJobName(serverId) {
 
 function panelJobName(guildId) {
   return `${JOB_PREFIX}:panel:${guildId}`;
+}
+
+/**
+ * Löscht die vorherige Statusmeldung desselben Servers, damit sich im
+ * Benachrichtigungs-Channel nicht bei jedem Wechsel eine weitere Nachricht
+ * ansammelt. Die ID wird am Server hinterlegt und übersteht so einen Neustart.
+ */
+async function removePreviousAlert(guild, server) {
+  const { alertMessageId, alertChannelId } = server.meta || {};
+  if (!alertMessageId || !alertChannelId) {
+    return;
+  }
+
+  const channel = await resolveTextAnnouncementChannel(guild, alertChannelId);
+  if (!channel) {
+    return;
+  }
+
+  const message = await channel.messages.fetch(alertMessageId).catch(() => null);
+  await message?.delete().catch(() => null);
 }
 
 async function announceStateChange(client, server, online, config) {
@@ -37,6 +57,8 @@ async function announceStateChange(client, server, online, config) {
     return;
   }
 
+  await removePreviousAlert(guild, server);
+
   const embed = new EmbedBuilder()
     .setColor(online ? "#57f287" : "#ed4245")
     .setTitle(online ? `🟢 ${server.name} ist wieder online` : `🔴 ${server.name} ist offline`)
@@ -45,7 +67,12 @@ async function announceStateChange(client, server, online, config) {
 
   const content = !online && config.alertRoleId ? `<@&${config.alertRoleId}>` : undefined;
 
-  await channel.send({ content, embeds: [embed] }).catch(() => null);
+  const message = await channel.send({ content, embeds: [embed] }).catch(() => null);
+
+  patchServerMeta(server.id, {
+    alertMessageId: message?.id || "",
+    alertChannelId: message ? channel.id : ""
+  });
 }
 
 async function pollServer(client, server) {
@@ -192,4 +219,4 @@ export function stopPollJobs(client) {
   lastOnlineState.clear();
 }
 
-export { pollServer, refreshPanel };
+export { announceStateChange, pollServer, refreshPanel };

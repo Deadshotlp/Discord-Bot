@@ -18,6 +18,8 @@ export function normalizeWeeklyReportConfig(rawConfig) {
 
   return {
     publishChannelId: safeString(config.publishChannelId),
+    // Leer = Erinnerung landet im Veröffentlichungs-Channel.
+    reminderChannelId: safeString(config.reminderChannelId),
     publishWeekday: clampInteger(config.publishWeekday, 1, 7, 7),
     publishHour: clampInteger(config.publishHour, 0, 23, 18),
     publishMinute: clampInteger(config.publishMinute, 0, 59, 0),
@@ -63,6 +65,10 @@ export function parseTimeInput(value) {
   }
 
   return { hour, minute };
+}
+
+export function resolveReminderChannelId(config) {
+  return safeString(config?.reminderChannelId) || safeString(config?.publishChannelId);
 }
 
 export function formatPublishSchedule(config) {

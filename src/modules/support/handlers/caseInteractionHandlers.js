@@ -66,7 +66,7 @@ export async function handleClaimInteraction({ client, interaction, caseId }) {
     return;
   }
 
-  const talkChannel = await findFreeTalkChannel(interaction.guild, config, client.botContext.logger);
+  const talkChannel = await findFreeTalkChannel(client, interaction.guild, config);
   if (!talkChannel) {
     await interaction.reply({
       content: "Kein freier Talk-Channel verfügbar und es konnte kein neuer erstellt werden.",

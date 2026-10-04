@@ -360,10 +360,46 @@ textarea.input { min-height: 90px; resize: vertical; }
   white-space: pre-wrap; word-break: break-all; margin: 0;
 }
 
+/* --- Ticket-Verlauf ------------------------------------------------------- */
+
+.link-cell { cursor: pointer; }
+.link-cell:hover strong { color: var(--accent); text-decoration: underline; }
+
+.thread {
+  display: flex; flex-direction: column; gap: 14px;
+  max-height: 460px; overflow-y: auto;
+  padding-right: 6px;
+}
+
+.thread-message { display: flex; gap: 10px; align-items: flex-start; }
+.thread-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; }
+.thread-avatar.placeholder {
+  display: grid; place-items: center;
+  background: var(--bg-input); color: var(--text-muted);
+  font-size: 13px; font-weight: 600; text-transform: uppercase;
+}
+
+.thread-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.thread-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; flex-wrap: wrap; }
+.thread-text { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.thread-embed {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px; font-size: 14px;
+  display: flex; flex-direction: column; gap: 3px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.thread-embed-author { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+
+.thread-attachment { font-size: 13px; color: var(--accent); width: fit-content; }
+
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; }
   .nav { flex-direction: row; overflow-x: auto; }
   .content { padding: 20px 16px 48px; }
   .field-row { grid-template-columns: 1fr; }
+  .thread { max-height: 60vh; }
 }

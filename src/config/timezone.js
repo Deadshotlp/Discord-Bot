@@ -1,8 +1,14 @@
+import "dotenv/config";
+
 export const DEFAULT_TIMEZONE = "Europe/Berlin";
 
-function isKnownTimezone(zone) {
+// Diese Werte setzen Container-Umgebungen (u. a. Pterodactyl) von sich aus.
+// Sie sagen nichts darüber, in welcher Zeitzone der Bot rechnen soll.
+const CONTAINER_DEFAULT_TIMEZONES = new Set(["utc", "etc/utc", "gmt", "etc/gmt", "universal", "zulu", ":utc"]);
+
+function isValidTimezone(name) {
   try {
-    new Intl.DateTimeFormat("de-DE", { timeZone: zone }).format(new Date());
+    new Intl.DateTimeFormat("de-DE", { timeZone: name });
     return true;
   } catch {
     return false;
@@ -10,27 +16,45 @@ function isKnownTimezone(zone) {
 }
 
 /**
- * Setzt die Zeitzone des Prozesses. Der gesamte Bot rechnet mit lokaler Zeit –
- * Tagesgrenzen von Abmeldungen, Meeting-Termine, Wochenberichte, Tagesprofile
- * im Monitoring. Im Container ist die Systemzeit üblicherweise UTC, wodurch
- * alles um eine bis zwei Stunden verschoben wäre.
+ * Legt die Zeitzone des Prozesses fest.
  *
- * Node übernimmt eine Änderung von process.env.TZ zur Laufzeit, solange sie
- * vor der ersten Datumsberechnung erfolgt. Deshalb wird das hier beim Laden
- * der Konfiguration erledigt.
+ * Terminlogik (Meetings, Wochenberichte, Abmeldungen) und die Tagesbuckets der
+ * Statistiken rechnen mit `setHours()` bzw. SQLite-`localtime` und richten sich
+ * damit nach der Prozess-Zeitzone. Container laufen ohne gesetztes TZ auf UTC,
+ * wodurch ein auf 16:00 gestelltes Meeting in Discord als 18:00 erscheint.
  *
- * Bewusst eine Zeitzone statt eines festen Versatzes: "Europe/Berlin" deckt
- * MEZ (+1) und MESZ (+2) samt Umstellungsterminen ab, "+01:00" wäre im Sommer
- * eine Stunde daneben.
+ * Ein vom Container vorgegebenes `TZ=UTC` wird bewusst nicht übernommen:
+ * Pterodactyl reicht es an jeden Server durch, und genau dadurch lief der Bot
+ * trotz dieser Funktion weiter zwei Stunden nach. Wer wirklich UTC will,
+ * setzt `BOT_TIMEZONE=UTC`.
+ *
+ * Ein zur Laufzeit gesetztes `process.env.TZ` wirkt in Node ab v16 sowohl auf
+ * Date/Intl als auch auf die libc – und damit auf better-sqlite3.
  */
-export function applyTimezone(rawValue) {
-  const requested = String(rawValue ?? "").trim() || DEFAULT_TIMEZONE;
-  const valid = isKnownTimezone(requested);
-  const timezone = valid ? requested : DEFAULT_TIMEZONE;
+export function applyTimezone(rawTimezone = process.env.BOT_TIMEZONE, currentTz = process.env.TZ) {
+  const requested = String(rawTimezone || "").trim();
+  const inherited = String(currentTz || "").trim();
+  const usableInherited = CONTAINER_DEFAULT_TIMEZONES.has(inherited.toLowerCase()) ? "" : inherited;
+
+  let timezone = requested || usableInherited || DEFAULT_TIMEZONE;
+  let source = requested ? "BOT_TIMEZONE" : (usableInherited ? "TZ" : "Standard");
+  let warning = "";
+
+  if (!isValidTimezone(timezone)) {
+    warning = `Unbekannte Zeitzone "${timezone}", es wird ${DEFAULT_TIMEZONE} verwendet.`;
+    timezone = DEFAULT_TIMEZONE;
+    source = "Standard";
+  }
 
   process.env.TZ = timezone;
 
-  return { timezone, requested, valid };
+  return {
+    timezone,
+    source,
+    warning,
+    containerTz: inherited,
+    resolved: Intl.DateTimeFormat().resolvedOptions().timeZone
+  };
 }
 
 function pad(value) {
@@ -61,12 +85,4 @@ export function formatLocalTimestamp(value = new Date()) {
     + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ${formatOffset(date)}`;
 }
 
-export function describeTimezone(timezone = process.env.TZ) {
-  const now = new Date();
-
-  return {
-    timezone,
-    offset: formatOffset(now),
-    localTime: new Intl.DateTimeFormat("de-DE", { dateStyle: "short", timeStyle: "short" }).format(now)
-  };
-}
+export const timezoneInfo = applyTimezone();

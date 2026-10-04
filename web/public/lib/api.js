@@ -59,6 +59,14 @@ export const api = {
     request("GET", `/api/guilds/${guildId}/servers/${serverId}/tokens`),
 
   tickets: (guildId, query = "") => request("GET", `/api/guilds/${guildId}/tickets${query}`),
+  ticketMessages: (guildId, ticketId) =>
+    request("GET", `/api/guilds/${guildId}/tickets/${ticketId}/messages`),
+  sendTicketMessage: (guildId, ticketId, content) =>
+    request("POST", `/api/guilds/${guildId}/tickets/${ticketId}/messages`, { content }),
+  closeTicket: (guildId, ticketId) =>
+    request("POST", `/api/guilds/${guildId}/tickets/${ticketId}/close`, {}),
+  escalateTicket: (guildId, ticketId, departmentId) =>
+    request("POST", `/api/guilds/${guildId}/tickets/${ticketId}/escalate`, { departmentId }),
   cases: (guildId) => request("GET", `/api/guilds/${guildId}/cases`),
   supportStats: (guildId, days) => request("GET", `/api/guilds/${guildId}/stats/support?days=${days}`),
   teamStats: (guildId, days) => request("GET", `/api/guilds/${guildId}/stats/team?days=${days}`),

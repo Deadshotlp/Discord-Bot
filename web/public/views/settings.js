@@ -69,7 +69,8 @@ const MODULE_FIELDS = {
     ].map((label, index) => ({ value: index + 1, label })) },
     { key: "publishHour", label: "Stunde", type: "number", min: 0, max: 23 },
     { key: "publishMinute", label: "Minute", type: "number", min: 0, max: 59 },
-    { key: "reminderHoursBefore", label: "Erinnerung (Std. vorher, 0 = aus)", type: "number", min: 0, max: 168 }
+    { key: "reminderHoursBefore", label: "Erinnerung (Std. vorher, 0 = aus)", type: "number", min: 0, max: 168 },
+    { key: "reminderChannelId", label: "Erinnerungs-Channel", type: "channel", hint: "Leer = Veröffentlichungs-Channel" }
   ],
   "steam-link": [
     { key: "ingameCommand", label: "Chat-Befehl im Spiel", type: "text", hint: "Standard: !discord" },
