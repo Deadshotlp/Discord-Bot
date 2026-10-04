@@ -259,8 +259,8 @@ Befehle: `/meeting anmelden|abmelden|thema|status`
 
 - `/updates-repo add owner/repo` beobachtet GitHub-Releases; beim Hinzufügen wird
   der aktuelle Stand als Basislinie gespeichert.
-- Optional mit Branch (`/updates-repo add … branch:dev` oder nachträglich
-  `/updates-repo branch`): Releases werden weiter gepostet, neue Commits auf dem
+- Optional mit Branch (`/updates-repo add … branch:dev` – auch für ein schon
+  beobachtetes Repo – oder `/updates-repo branch`): Releases werden weiter gepostet, neue Commits auf dem
   Branch zusätzlich – mehrere in einem Post. Ohne Branch: neue Releases, bei Repos
   ohne Releases Commits auf dem Haupt-Branch. Forks werden dann mit diesem Branch
   des Originals verglichen.

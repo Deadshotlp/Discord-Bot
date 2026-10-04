@@ -145,15 +145,45 @@ async function requireBranch(owner, repo, branch, token) {
   }
 }
 
+/**
+ * Ein schon beobachtetes Repo erneut hinzuzufügen heißt: die mitgegebenen
+ * Angaben übernehmen. Wer "add" mit Branch tippt, will genau das – eine
+ * Fehlermeldung "wird bereits beobachtet" hilft da nicht weiter.
+ */
+async function updateWatchedRepo({ settingsStore, guildId, token, current, label, branch }) {
+  const branchName = String(branch || "").trim();
+  const labelText = cleanLabel(label);
+
+  if (!branchName && !labelText) {
+    const onBranch = current.branch ? ` (Branch \`${current.branch}\`)` : "";
+    throw new RepoConfigError(`\`${repoKey(current)}\` wird bereits beobachtet${onBranch}. `
+      + "Gib einen Branch oder Anzeigenamen an, um ihn zu ändern.");
+  }
+
+  if (branchName && branchName !== current.branch) {
+    await setRepoBranch({ settingsStore, guildId, token, input: repoKey(current), branch: branchName });
+  }
+
+  const repos = getRepos(settingsStore, guildId);
+  const entry = repos[findWatchedRepo(repos, repoKey(current))];
+
+  if (labelText) {
+    entry.label = labelText;
+    saveRepos(settingsStore, guildId, repos);
+  }
+
+  return { entry, updated: true };
+}
+
+/**
+ * Beobachtet ein neues Repo oder aktualisiert ein schon beobachtetes.
+ * `updated` sagt, welcher Fall eingetreten ist.
+ */
 export async function addRepo({ settingsStore, guildId, token, input, label, branch }) {
   const slug = parseRepoSlug(input);
 
   if (!slug) {
     throw new RepoConfigError("Bitte gib das Repo im Format `owner/repo` an, z.B. `torvalds/linux`.");
-  }
-
-  if (findRepoIndex(getRepos(settingsStore, guildId), slug.owner, slug.repo) !== -1) {
-    throw new RepoConfigError(`\`${slug.owner}/${slug.repo}\` wird bereits beobachtet.`);
   }
 
   const info = await fetchRepoInfo(slug.owner, slug.repo, token).catch(() => null);
@@ -164,19 +194,33 @@ export async function addRepo({ settingsStore, guildId, token, input, label, bra
   // Bei umbenannten Repos gleich den aktuellen Namen speichern.
   const owner = info.owner?.login || slug.owner;
   const repo = info.name || slug.repo;
-  const branchName = String(branch || "").trim();
 
+  // Gesucht wird unter beiden Namen: eingetragen sein kann noch der alte.
+  const findExisting = () => {
+    const repos = getRepos(settingsStore, guildId);
+    const index = [findRepoIndex(repos, owner, repo), findRepoIndex(repos, slug.owner, slug.repo)]
+      .find((candidate) => candidate !== -1);
+    return index === undefined ? null : repos[index];
+  };
+
+  const existing = findExisting();
+  if (existing) {
+    return updateWatchedRepo({ settingsStore, guildId, token, current: existing, label, branch });
+  }
+
+  const branchName = String(branch || "").trim();
   await requireBranch(owner, repo, branchName, token);
   const baseline = await repoBaseline(owner, repo, branchName, token);
 
-  const repos = getRepos(settingsStore, guildId);
-  if (findRepoIndex(repos, owner, repo) !== -1) {
-    throw new RepoConfigError(`\`${owner}/${repo}\` wird bereits beobachtet.`);
+  // Während der Abrufe kann dasselbe Repo parallel angelegt worden sein.
+  const raced = findExisting();
+  if (raced) {
+    return updateWatchedRepo({ settingsStore, guildId, token, current: raced, label, branch });
   }
 
   const entry = { owner, repo, label: cleanLabel(label), branch: branchName, ...baseline, forks: [] };
-  saveRepos(settingsStore, guildId, [...repos, entry]);
-  return entry;
+  saveRepos(settingsStore, guildId, [...getRepos(settingsStore, guildId), entry]);
+  return { entry, updated: false };
 }
 
 /**

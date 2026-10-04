@@ -40,7 +40,7 @@ function describeWatching(entry) {
 async function handleAdd({ interaction, settingsStore, env }) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const entry = await addRepo({
+  const { entry, updated } = await addRepo({
     settingsStore,
     guildId: interaction.guildId,
     token: env.githubToken,
@@ -48,6 +48,14 @@ async function handleAdd({ interaction, settingsStore, env }) {
     label: interaction.options.getString("label"),
     branch: interaction.options.getString("branch")
   });
+
+  if (updated) {
+    const labelNote = entry.label ? `, Anzeigename „${entry.label}“` : "";
+    await interaction.editReply({
+      content: `\`${repoKey(entry)}\` wurde bereits beobachtet und ist jetzt aktualisiert${describeWatching(entry)}${labelNote}.`
+    });
+    return;
+  }
 
   await interaction.editReply({
     content: `\`${repoKey(entry)}\` wird jetzt beobachtet${describeWatching(entry)}. Nur zukünftige Updates werden gepostet.\n`

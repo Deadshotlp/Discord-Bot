@@ -27,11 +27,12 @@ function mockGitHub(t, state) {
     const path = String(url).replace("https://api.github.com", "");
     const respond = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
 
-    if (path === `/repos/${SLUG}`) {
+    // Jeder Repo-Name führt zum aktuellen – wie die Weiterleitung nach einer Umbenennung.
+    if (/^\/repos\/[^/]+\/[^/]+$/.test(path)) {
       return respond({ full_name: SLUG, name: "gamemodes", owner: { login: "Deadshotlp" }, default_branch: "main" });
     }
 
-    if (path === `/repos/${SLUG}/releases/latest`) {
+    if (path.endsWith("/releases/latest")) {
       return state.release ? respond(state.release) : respond({ message: "Not Found" }, 404);
     }
 
@@ -83,7 +84,7 @@ test("Repo mit Branch: Ausgangsstand ist neuester Branch-Commit, ohne Release ma
   mockGitHub(t, { release: null, branches: { main: [commit("m1")], dev: [commit("d1"), commit("d2")] } });
   const store = fakeStore();
 
-  const entry = await addRepo({ settingsStore: store, guildId: "g", token: "", input: SLUG, branch: "dev" });
+  const { entry } = await addRepo({ settingsStore: store, guildId: "g", token: "", input: SLUG, branch: "dev" });
 
   assert.equal(entry.branch, "dev");
   assert.equal(entry.lastSeenCommit, "d2");
@@ -103,7 +104,7 @@ test("Polling mit Branch: neue Commits gesammelt, erstes Release gepostet, nicht
   const state = { release: null, branches: { main: [commit("m1")], dev: [commit("d1")] } };
   mockGitHub(t, state);
   const store = fakeStore();
-  const entry = await addRepo({ settingsStore: store, guildId: "g", token: "", input: SLUG, branch: "dev" });
+  const { entry } = await addRepo({ settingsStore: store, guildId: "g", token: "", input: SLUG, branch: "dev" });
   const channel = fakeChannel();
 
   // Nichts Neues: kein Post.
@@ -146,4 +147,41 @@ test("Branch umstellen setzt den Stand neu, leer stellt den Standard wieder her"
   assert.equal(store.repos[0].branch, "");
   assert.equal(store.repos[0].lastSeenCommit, "");
   assert.equal(store.repos[0].lastSeenId, "3");
+});
+
+test("Erneutes Hinzufügen mit Branch stellt das vorhandene Repo um statt abzulehnen", async (t) => {
+  mockGitHub(t, { release: release(3, "v0.3.0"), branches: { main: [commit("m1")], dev: [commit("d1")] } });
+  const store = fakeStore();
+  await addRepo({ settingsStore: store, guildId: "g", token: "", input: SLUG });
+
+  const result = await addRepo({ settingsStore: store, guildId: "g", token: "", input: SLUG, branch: "dev", label: "Gamemode" });
+
+  assert.equal(result.updated, true);
+  assert.equal(store.repos.length, 1, "kein doppelter Eintrag");
+  assert.equal(store.repos[0].branch, "dev");
+  assert.equal(store.repos[0].lastSeenCommit, "d1");
+  assert.equal(store.repos[0].label, "Gamemode");
+});
+
+test("Auch unter altem Namen eingetragene Repos werden gefunden", async (t) => {
+  // GitHub liefert für den alten Namen schon den neuen (Umbenennung).
+  mockGitHub(t, { release: null, branches: { main: [commit("m1")], dev: [commit("d1")] } });
+  const store = fakeStore([{ owner: "Deadshotlp", repo: "Gamemodes-Alt", lastSeenId: "m1", forks: [] }]);
+
+  const result = await addRepo({ settingsStore: store, guildId: "g", token: "", input: "Deadshotlp/Gamemodes-Alt", branch: "dev" });
+
+  assert.equal(result.updated, true);
+  assert.equal(store.repos.length, 1);
+  assert.equal(store.repos[0].branch, "dev");
+});
+
+test("Ohne neue Angaben bleibt es bei der Meldung, mit Hinweis wie man umstellt", async (t) => {
+  mockGitHub(t, { release: null, branches: { main: [commit("m1")] } });
+  const store = fakeStore();
+  await addRepo({ settingsStore: store, guildId: "g", token: "", input: SLUG });
+
+  await assert.rejects(
+    addRepo({ settingsStore: store, guildId: "g", token: "", input: SLUG }),
+    /bereits beobachtet\. Gib einen Branch oder Anzeigenamen an/
+  );
 });
