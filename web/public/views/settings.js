@@ -57,9 +57,10 @@ const MODULE_FIELDS = {
     { key: "rulesText", label: "Regeltext", type: "textarea" }
   ],
   updates: [
-    { key: "updatesChannelId", label: "Updates-Channel", type: "channel" },
+    { key: "channelId", label: "Updates-Channel", type: "channel" },
     { key: "changelogPingRoleId", label: "Ping-Rolle für Changelogs", type: "role" },
-    { key: "changelogNote", label: "Hinweistext unter Changelogs", type: "textarea" }
+    { key: "changelogRoleIds", label: "Rollen, die /changelog nutzen dürfen", type: "roles" },
+    { key: "changelogNoteText", label: "Hinweistext unter Changelogs", type: "textarea" }
   ],
   "weekly-report": [
     { key: "publishChannelId", label: "Veröffentlichungs-Channel", type: "channel" },
@@ -377,16 +378,94 @@ function creatorsCard(guildId, guild, creators, refresh) {
   return card("Content-Creator-Benachrichtigungen", form);
 }
 
+function updatesReposCard(guildId, guild, repos, refresh) {
+  const isAdmin = guild.accessLevel >= ACCESS.ADMIN;
+  const slugOf = (entry) => `${entry.owner}/${entry.repo}`;
+
+  const submit = async (action, message) => {
+    await action();
+    toast(message, "success");
+    await refresh();
+  };
+
+  const addRepo = () => modal("Repo beobachten", h("div", {},
+    field("Repo", h("input.input", { name: "repo", required: true, placeholder: "owner/repo oder GitHub-Link" })),
+    field("Anzeigename", h("input.input", { name: "label", maxLength: 80 }), "Optional, erscheint im Titel der Posts")), {
+    submitLabel: "Hinzufügen",
+    onSubmit: (data) => submit(() => api.addUpdateRepo(guildId, data), "Repo wird beobachtet.")
+  });
+
+  const addFork = async (entry) => {
+    const listId = `fork-candidates-${entry.owner}-${entry.repo}`.replace(/[^\w-]/g, "_");
+    const candidates = h("datalist", { id: listId });
+
+    modal(`Fork zu ${slugOf(entry)} hinterlegen`, h("div", {},
+      field("Fork", h("input.input", { name: "fork", required: true, list: listId, placeholder: "benutzer oder benutzer/repo" }),
+        "Gepostet werden nur Commits, die es im Original nicht gibt"),
+      candidates,
+      field("Branch", h("input.input", { name: "branch", placeholder: "leer = Haupt-Branch des Forks" })),
+      field("Anzeigename", h("input.input", { name: "label", maxLength: 80 }))), {
+      submitLabel: "Hinterlegen",
+      onSubmit: (data) => submit(() => api.addUpdateFork(guildId, slugOf(entry), data), "Fork hinterlegt.")
+    });
+
+    // Vorschläge nachladen, der Dialog ist sofort bedienbar.
+    const forks = await api.forkCandidates(guildId, slugOf(entry)).catch(() => []);
+    candidates.append(...forks.map((fork) => h("option", { value: fork.slug })));
+  };
+
+  const rows = repos.flatMap((entry) => [
+    [
+      h("strong", {}, slugOf(entry)),
+      entry.label || "–",
+      "Repo",
+      isAdmin
+        ? h("div.row", {},
+          h("button.btn.btn-sm", { onClick: () => addFork(entry) }, "+ Fork"),
+          h("button.btn.btn-sm.btn-danger", {
+            onClick: async () => {
+              if (confirmDialog(`${slugOf(entry)} samt Forks nicht mehr beobachten?`)) {
+                await submit(() => api.removeUpdateRepo(guildId, slugOf(entry)), "Repo entfernt.");
+              }
+            }
+          }, "Entfernen"))
+        : "–"
+    ],
+    ...entry.forks.map((fork) => [
+      h("span", { style: { paddingLeft: "18px" } }, `↳ ${fork.owner}/${fork.repo}`),
+      fork.label || "–",
+      h("span.mono", { style: { fontSize: "12px" } }, fork.branch),
+      isAdmin
+        ? h("button.btn.btn-sm.btn-danger", {
+          onClick: () => submit(
+            () => api.removeUpdateFork(guildId, slugOf(entry), `${fork.owner}/${fork.repo}@${fork.branch}`),
+            "Fork entfernt.")
+        }, "Entfernen")
+        : "–"
+    ])
+  ]);
+
+  return card(
+    h("div.row-between", { style: { width: "100%" } },
+      h("span", {}, "GitHub-Updates"),
+      isAdmin ? h("button.btn.btn-sm.btn-primary", { onClick: addRepo }, "+ Repo") : null),
+    h("p.muted", { style: { fontSize: "13px" } },
+      "Neue Releases bzw. Commits landen im Updates-Channel. Zu jedem Repo lassen sich bestimmte Forks "
+      + "hinterlegen – deren eigene Änderungen werden ebenfalls gepostet."),
+    table(["Repo / Fork", "Anzeigename", "Branch", ""], rows, { empty: "Noch kein Repo hinterlegt." }));
+}
+
 export async function renderSettings({ guildId, guild }) {
   const container = h("div.stack");
 
   async function refresh() {
     clear(container).append(spinner());
 
-    const [modules, departments, creators] = await Promise.all([
+    const [modules, departments, creators, updateRepos] = await Promise.all([
       api.modules(guildId),
       api.departments(guildId),
-      api.get(`/api/guilds/${guildId}/creators`).catch(() => null)
+      api.get(`/api/guilds/${guildId}/creators`).catch(() => null),
+      api.updateRepos(guildId).catch(() => null)
     ]);
 
     clear(container).append(
@@ -402,6 +481,7 @@ export async function renderSettings({ guildId, guild }) {
         .filter((moduleInfo) => moduleInfo.name !== "dashboard" && moduleInfo.name !== "system")
         .map((moduleInfo) => moduleCard(guildId, guild, moduleInfo, refresh))),
 
+      updateRepos ? updatesReposCard(guildId, guild, updateRepos, refresh) : null,
       creators ? creatorsCard(guildId, guild, creators, refresh) : null);
   }
 

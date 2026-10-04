@@ -1,6 +1,6 @@
 // Muss vor allem anderen laufen: setzt process.env.TZ, bevor irgendein Modul
 // mit lokalen Zeiten rechnet.
-import { timezoneInfo } from "./config/timezone.js";
+import { formatOffset, timezoneInfo } from "./config/timezone.js";
 
 import {
   Client,
@@ -23,9 +23,15 @@ if (timezoneInfo.warning) {
   logger.warn(timezoneInfo.warning);
 }
 
+// Ohne diese Zeile ist im Nachhinein kaum zu erkennen, ob falsche Uhrzeiten an
+// der Zeitzone lagen.
 logger.info("Zeitzone gesetzt", {
   timezone: timezoneInfo.timezone,
-  quelle: timezoneInfo.source
+  quelle: timezoneInfo.source,
+  versatz: formatOffset(),
+  ...(timezoneInfo.containerTz && timezoneInfo.containerTz !== timezoneInfo.timezone
+    ? { containerTzIgnoriert: timezoneInfo.containerTz }
+    : {})
 });
 
 const settingsStore = new SettingsStore(modules, logger);

@@ -5,6 +5,7 @@ import {
   EmbedBuilder,
   StringSelectMenuBuilder
 } from "discord.js";
+import { formatLocalTimestamp } from "../../../config/timezone.js";
 import { formatDepartmentRoleMentions } from "./config.js";
 
 export const SUPPORT_CLAIM_PREFIX = "support_claim:";
@@ -154,14 +155,14 @@ export function buildCaseTranscript(caseData, departmentName = "") {
     `Department: ${departmentName || caseData.departmentId}`,
     `Warte-Channel: ${caseData.waitingChannelId || "-"}`,
     `Talk-Channel: ${caseData.talkChannelId || "-"}`,
-    `Erstellt: ${new Date(caseData.createdAt).toISOString()}`,
-    `Geschlossen: ${caseData.closedAt ? new Date(caseData.closedAt).toISOString() : "-"}`,
+    `Erstellt: ${formatLocalTimestamp(caseData.createdAt)}`,
+    `Geschlossen: ${caseData.closedAt ? formatLocalTimestamp(caseData.closedAt) : "-"}`,
     "",
     "Timeline:"
   ];
 
   for (const action of caseData.actions || []) {
-    lines.push(`- ${new Date(action.at).toISOString()} | ${action.text}`);
+    lines.push(`- ${formatLocalTimestamp(action.at)} | ${action.text}`);
   }
 
   return `${lines.join("\n")}\n`;

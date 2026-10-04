@@ -1,4 +1,4 @@
-# Thrawn's Revenge Discord Bot
+# Discord Bot
 
 Modularer Discord-Bot für Community- und Gameserver-Betrieb. Die Konfiguration
 läuft vollständig über ein Web-Dashboard – in Discord gibt es kein Setup-Panel
@@ -66,6 +66,22 @@ Zustand liegt in `data/`:
 Über `DATA_DIR` lässt sich ein anderes Verzeichnis setzen, z. B. ein
 persistentes Volume. Eine vorhandene `data/module-config.json` aus der
 Vorgängerversion wird beim ersten Start automatisch übernommen.
+
+## Zeitzone
+
+Der Bot rechnet durchgehend mit lokaler Zeit: Tagesgrenzen von Abmeldungen,
+Meeting-Termine, Veröffentlichung der Wochenberichte, Tagesprofile im
+Monitoring, Zeitstempel in Logs und Transkripten. Vorgabe ist
+`Europe/Berlin`; abweichend über einen IANA-Namen einstellbar:
+
+```dotenv
+BOT_TIMEZONE=Europe/Berlin
+```
+
+Ein vom Container gesetztes `TZ=UTC` (Pterodactyl) wird ignoriert. Ein fester
+Versatz wie `+01:00` wird absichtlich nicht unterstützt: `Europe/Berlin`
+deckt MEZ (+1) und MESZ (+2) samt Umstellungsterminen ab. Details siehe
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Web-Dashboard
 
@@ -243,6 +259,14 @@ Befehle: `/meeting anmelden|abmelden|thema|status`
 
 - `/updates-repo add owner/repo` beobachtet GitHub-Releases; beim Hinzufügen wird
   der aktuelle Stand als Basislinie gespeichert.
+- `/updates-repo fork-add repo:owner/repo fork:benutzer [branch]` hinterlegt
+  zusätzlich einen bestimmten Fork. Gepostet werden nur Commits, die es im
+  Original nicht gibt – zieht ein Fork bloß den Stand des Originals nach, bleibt
+  es still. Ohne `branch` gilt der Haupt-Branch des Forks. Entfernen mit
+  `/updates-repo fork-remove`; alles auch im Dashboard unter *Einstellungen →
+  GitHub-Updates*.
+- Wird ein beobachtetes Repo auf GitHub umbenannt, übernimmt der Bot den neuen
+  Namen beim nächsten Abruf selbst.
 - `/changelog` öffnet ein Formular für manuelle Ankündigungen.
 - Content-Creator-Kanäle werden im Dashboard gepflegt; Profile werden gegen die
   YouTube-/Twitch-API aufgelöst. Dafür sind `YOUTUBE_API_KEY` bzw.

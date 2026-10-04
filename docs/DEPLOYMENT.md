@@ -68,10 +68,14 @@ Der Bot setzt seine Zeitzone deshalb selbst und nutzt ohne Angabe
 BOT_TIMEZONE=Europe/Berlin
 ```
 
+Pterodactyl gibt jedem Server `TZ=UTC` mit. Dieser Wert wird deshalb
+ignoriert; wer wirklich UTC will, setzt `BOT_TIMEZONE=UTC`. Andere
+`TZ`-Werte übernimmt der Bot, `BOT_TIMEZONE` hat Vorrang davor.
+
 Beim Start protokolliert der Bot die verwendete Zone, z. B.
-`Zeitzone gesetzt {"timezone":"Europe/Berlin","quelle":"Standard"}`. Steht dort
-etwas anderes als erwartet, setzt die Container-Umgebung ein eigenes `TZ` –
-`BOT_TIMEZONE` hat Vorrang davor.
+`Zeitzone gesetzt {"timezone":"Europe/Berlin","quelle":"Standard","versatz":"+02:00","containerTzIgnoriert":"UTC"}`.
+Alle Log-Zeilen tragen Ortszeit mit Versatz (`[2026-10-04 14:23:05 +02:00]`) –
+früher stand dort UTC, was wie eine um zwei Stunden nachgehende Uhr aussah.
 
 ---
 

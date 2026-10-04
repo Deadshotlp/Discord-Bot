@@ -1,5 +1,5 @@
 import { ACCESS, api } from "../lib/api.js";
-import { badge, card, formatDate, formatDateTime, formatRelative, h, stat, table } from "../lib/ui.js";
+import { badge, card, formatDate, formatDateTime, formatRelative, h, stat, table, todayIso } from "../lib/ui.js";
 import { lineChart } from "../lib/charts.js";
 
 function serverTile(summary) {
@@ -28,7 +28,7 @@ export async function renderOverview({ guildId, guild }) {
     isStaff ? api.supportStats(guildId, 30).catch(() => null) : Promise.resolve(null)
   ]);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const currentlyAway = absences.absences.filter((absence) =>
     absence.status === "active" && absence.startsOn <= today && absence.endsOn >= today);
 

@@ -28,6 +28,67 @@ export function buildRepoUpdateEmbed(repoEntry, update) {
   return embed;
 }
 
+const FORK_COMMIT_LIST_LIMIT = 10;
+
+function commitHeadline(commit) {
+  return (commit.commit?.message || "").split("\n")[0] || commit.sha.slice(0, 7);
+}
+
+/**
+ * `commits` sind die neuen Fork-eigenen Commits, älteste zuerst. `aheadBy`
+ * ist der gesamte Vorsprung des Forks vor dem Original (null = unbekannt).
+ */
+export function buildForkUpdateEmbed(repoEntry, fork, { commits, aheadBy = null, compareUrl = "" }) {
+  const parentName = repoEntry.label || `${repoEntry.owner}/${repoEntry.repo}`;
+  const displayName = fork.label || `${parentName} · Fork von ${fork.owner}`;
+  const newest = commits[commits.length - 1];
+  const single = commits.length === 1;
+
+  const embed = new EmbedBuilder()
+    .setColor(0x8957e5)
+    .setTitle(`${displayName} — ${single ? "Neuer Commit" : `${commits.length} neue Commits`}`)
+    .setURL(single || !compareUrl ? newest.html_url : compareUrl)
+    .addFields(
+      { name: "Fork von", value: `${repoEntry.owner}/${repoEntry.repo}`, inline: true },
+      { name: "Branch", value: fork.branch || "-", inline: true }
+    )
+    .setFooter({ text: `${fork.owner}/${fork.repo}` });
+
+  if (aheadBy !== null) {
+    embed.addFields({ name: "Vorsprung", value: `${aheadBy} Commit${aheadBy === 1 ? "" : "s"}`, inline: true });
+  }
+
+  if (single) {
+    const author = newest.commit?.author?.name || newest.author?.login;
+    if (author) {
+      embed.addFields({ name: "Autor", value: author, inline: true });
+    }
+
+    embed.setDescription(`[\`${newest.sha.slice(0, 7)}\`](${newest.html_url}) ${newest.commit?.message || ""}`
+      .slice(0, DESCRIPTION_MAX_LENGTH));
+  } else {
+    // Neueste zuerst, wie man es von einem Changelog erwartet.
+    const shown = commits.slice(-FORK_COMMIT_LIST_LIMIT).reverse();
+    const lines = shown.map((commit) => {
+      const author = commit.commit?.author?.name || commit.author?.login;
+      return `[\`${commit.sha.slice(0, 7)}\`](${commit.html_url}) ${commitHeadline(commit)}${author ? ` — ${author}` : ""}`;
+    });
+
+    if (commits.length > shown.length) {
+      lines.push(`… und ${commits.length - shown.length} weitere`);
+    }
+
+    embed.setDescription(lines.join("\n").slice(0, DESCRIPTION_MAX_LENGTH));
+  }
+
+  const date = newest.commit?.author?.date;
+  if (date) {
+    embed.setTimestamp(new Date(date));
+  }
+
+  return embed;
+}
+
 const ROMAN_NUMERALS = [
   [1000, "M"], [900, "CM"], [500, "D"], [400, "CD"],
   [100, "C"], [90, "XC"], [50, "L"], [40, "XL"],

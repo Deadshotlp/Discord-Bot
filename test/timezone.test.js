@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { DEFAULT_TIMEZONE, applyTimezone } from "../src/config/timezone.js";
+import { DEFAULT_TIMEZONE, applyTimezone, formatLocalTimestamp } from "../src/config/timezone.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -66,6 +66,33 @@ test("Ein gesetztes TZ wird uebernommen, wenn BOT_TIMEZONE fehlt", () => {
 
   assert.equal(result.timezone, "America/New_York");
   assert.equal(result.source, "TZ");
+});
+
+test("Ein vom Container vorgegebenes TZ=UTC wird ignoriert", () => {
+  // Pterodactyl setzt TZ=UTC fuer jeden Server – das war der Grund, warum der
+  // Bot trotz Zeitzonen-Fix zwei Stunden nachging.
+  for (const containerTz of ["UTC", "Etc/UTC", "GMT"]) {
+    const result = runInChildProcess({ TZ: containerTz });
+
+    assert.equal(result.timezone, DEFAULT_TIMEZONE, containerTz);
+    assert.equal(result.source, "Standard", containerTz);
+    assert.match(result.berlin, /16:00/, containerTz);
+  }
+});
+
+test("UTC bleibt moeglich, wenn es ausdruecklich gewuenscht ist", () => {
+  const result = runInChildProcess({ TZ: "UTC", BOT_TIMEZONE: "UTC" });
+
+  assert.equal(result.timezone, "UTC");
+  assert.equal(result.source, "BOT_TIMEZONE");
+});
+
+test("Zeitstempel fuer Logs zeigen Ortszeit mit Versatz statt UTC", () => {
+  applyTimezone("Europe/Berlin", "");
+
+  assert.equal(formatLocalTimestamp(new Date("2026-07-15T12:30:05Z")), "2026-07-15 14:30:05 +02:00");
+  assert.equal(formatLocalTimestamp(new Date("2026-01-15T12:30:05Z")), "2026-01-15 13:30:05 +01:00");
+  assert.equal(formatLocalTimestamp("kein Datum"), "-");
 });
 
 test("Eine unbekannte Zeitzone faellt mit Warnung auf den Standard zurueck", () => {

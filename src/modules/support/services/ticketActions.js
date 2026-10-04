@@ -1,4 +1,5 @@
 import { AttachmentBuilder, EmbedBuilder } from "discord.js";
+import { formatLocalTimestamp } from "../../../config/timezone.js";
 import { getDepartmentById } from "./config.js";
 import {
   resolveExistingRoleIds,
@@ -51,8 +52,8 @@ export async function buildTicketTranscriptContent(ticketChannel, ticket, depart
     `Department: ${departmentName || ticket.departmentId}`,
     `Channel: ${ticket.channelId}`,
     `Titel: ${ticket.ticketName || "-"}`,
-    `Erstellt: ${ticket.createdAt ? new Date(ticket.createdAt).toISOString() : "-"}`,
-    `Geschlossen: ${ticket.closedAt ? new Date(ticket.closedAt).toISOString() : "-"}`,
+    `Erstellt: ${ticket.createdAt ? formatLocalTimestamp(ticket.createdAt) : "-"}`,
+    `Geschlossen: ${ticket.closedAt ? formatLocalTimestamp(ticket.closedAt) : "-"}`,
     `Geschlossen von: ${ticket.closedById || "-"}`,
     "",
     "Beschreibung:",
@@ -63,7 +64,7 @@ export async function buildTicketTranscriptContent(ticketChannel, ticket, depart
 
   for (const message of ordered) {
     const author = message.author?.tag || message.author?.username || message.author?.id || "Unbekannt";
-    const timestamp = message.createdAt ? message.createdAt.toISOString() : new Date().toISOString();
+    const timestamp = formatLocalTimestamp(message.createdAt || new Date());
     const content = (message.content || "").trim();
     const text = content || "(kein Text)";
 

@@ -1,5 +1,5 @@
 {
-  "name": "thrawns-revenge-discord-bot",
+  "name": "discord-bot",
   "version": "2.0.0",
   "description": "Modularer Discord Bot mit Web-Dashboard, Server-Monitoring, Support-Tickets, Team-Abmeldungen und Steam-Verknüpfung",
   "type": "module",
