@@ -5,6 +5,7 @@ import {
 } from "discord.js";
 
 import { env } from "./config/env.js";
+import { describeTimezone } from "./config/timezone.js";
 import { closeDb } from "./core/db.js";
 import { SettingsStore } from "./core/settingsStore.js";
 import { Scheduler } from "./core/scheduler.js";
@@ -14,6 +15,18 @@ import { registerEvents } from "./events/registerEvents.js";
 import { modules } from "./modules/index.js";
 
 const logger = createLogger(env.logLevel);
+
+if (!env.timezoneValid) {
+  logger.warn("Unbekannte Zeitzone in BOT_TIMEZONE – es gilt die Vorgabe", {
+    angefordert: env.timezoneRequested,
+    verwendet: env.timezone
+  });
+}
+
+// Ohne diese Zeile ist im Nachhinein kaum zu erkennen, ob falsche Uhrzeiten an
+// der Zeitzone lagen.
+logger.info("Zeitzone", describeTimezone(env.timezone));
+
 const settingsStore = new SettingsStore(modules, logger);
 const scheduler = new Scheduler(logger);
 const { commandRegistry, commandPayload, commandToModule } = buildCommandRegistry(modules);

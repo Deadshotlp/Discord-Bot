@@ -140,7 +140,10 @@ export function formatMs(ms) {
 export function todayIso(offsetDays = 0) {
   const date = new Date();
   date.setDate(date.getDate() + offsetDays);
-  return date.toISOString().slice(0, 10);
+  // Bewusst lokal: toISOString() wäre UTC und zwischen 0 und 2 Uhr noch der Vortag.
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 // --- Bausteine -------------------------------------------------------------

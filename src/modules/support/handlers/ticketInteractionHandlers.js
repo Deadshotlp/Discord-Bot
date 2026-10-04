@@ -1,4 +1,5 @@
 import { AttachmentBuilder, ChannelType, MessageFlags } from "discord.js";
+import { formatLocalTimestamp } from "../../../config/timezone.js";
 import { getDepartmentById, normalizeDepartments } from "../services/config.js";
 import {
   getSupportConfig,
@@ -59,8 +60,8 @@ async function buildTicketTranscriptContent(ticketChannel, ticket, departmentNam
     `Department: ${departmentName || ticket.departmentId}`,
     `Channel: ${ticket.channelId}`,
     `Titel: ${ticket.ticketName || "-"}`,
-    `Erstellt: ${ticket.createdAt ? new Date(ticket.createdAt).toISOString() : "-"}`,
-    `Geschlossen: ${ticket.closedAt ? new Date(ticket.closedAt).toISOString() : "-"}`,
+    `Erstellt: ${ticket.createdAt ? formatLocalTimestamp(ticket.createdAt) : "-"}`,
+    `Geschlossen: ${ticket.closedAt ? formatLocalTimestamp(ticket.closedAt) : "-"}`,
     `Geschlossen von: ${ticket.closedById || "-"}`,
     "",
     "Beschreibung:",
@@ -71,7 +72,7 @@ async function buildTicketTranscriptContent(ticketChannel, ticket, departmentNam
 
   for (const message of ordered) {
     const author = message.author?.tag || message.author?.username || message.author?.id || "Unbekannt";
-    const timestamp = message.createdAt ? message.createdAt.toISOString() : new Date().toISOString();
+    const timestamp = formatLocalTimestamp(message.createdAt || new Date());
     const content = (message.content || "").trim();
     const text = content || "(kein Text)";
 

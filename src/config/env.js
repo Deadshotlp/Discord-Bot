@@ -1,5 +1,10 @@
 import "dotenv/config";
 import { parseSnowflakeList } from "../core/discordUtil.js";
+import { applyTimezone } from "./timezone.js";
+
+// Muss vor der ersten Datumsberechnung passieren, deshalb direkt beim Laden
+// der Konfiguration – sie ist das erste Modul des Bots.
+const timezone = applyTimezone(process.env.BOT_TIMEZONE);
 
 function parseBoolean(value, fallback = false) {
   if (value === undefined || value === null || value === "") {
@@ -33,6 +38,12 @@ const webBaseUrl = String(process.env.WEB_BASE_URL || `http://localhost:${webPor
 export const env = {
   discordToken: getRequiredEnv("DISCORD_TOKEN"),
   logLevel: process.env.LOG_LEVEL || "info",
+
+  // Zeitzone des Bots. Alle Termine, Tagesgrenzen und Auswertungen rechnen
+  // damit. Siehe config/timezone.js.
+  timezone: timezone.timezone,
+  timezoneRequested: timezone.requested,
+  timezoneValid: timezone.valid,
 
   // Privilegiertes Intent, nötig zum Auflisten aller Servermitglieder (Teamliste).
   // Muss zusätzlich im Discord Developer Portal freigeschaltet sein – sonst

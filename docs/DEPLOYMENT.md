@@ -35,6 +35,9 @@ WEB_HOST=0.0.0.0
 WEB_PORT=<Allocation-Port aus dem Panel>
 WEB_BASE_URL=https://bot.deadshot-development.de
 
+# Ohne das läuft der Bot in UTC – Termine und Tagesgrenzen wären verschoben.
+BOT_TIMEZONE=Europe/Berlin
+
 DISCORD_CLIENT_ID=<aus dem Developer Portal>
 DISCORD_CLIENT_SECRET=<aus dem Developer Portal>
 ```

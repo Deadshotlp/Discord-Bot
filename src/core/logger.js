@@ -1,3 +1,5 @@
+import { formatLocalTimestamp } from "../config/timezone.js";
+
 const LEVELS = {
   debug: 10,
   info: 20,
@@ -30,7 +32,7 @@ export function createLogger(level = "info") {
       return;
     }
 
-    const line = `[${new Date().toISOString()}] [${targetLevel.toUpperCase()}] ${message}${formatMeta(meta)}`;
+    const line = `[${formatLocalTimestamp()}] [${targetLevel.toUpperCase()}] ${message}${formatMeta(meta)}`;
 
     if (targetLevel === "error") {
       console.error(line);
